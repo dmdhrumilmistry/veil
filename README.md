@@ -29,6 +29,7 @@ Veil is an installable web app (PWA) that runs on desktop, Android, iOS and tabl
 | **Message encryption** | **AES-256-GCM** with a fresh key per message from a Signal-style HMAC KDF chain, which gives forward secrecy |
 | **Verification** | 60-digit safety numbers plus QR, identity pinning from invite codes, and warnings when a key changes |
 | **Storage** | IndexedDB, every record sealed with AES-256-GCM under a random master key wrapped by **PBKDF2-SHA-256 (600k)**. Lookup keys are HMAC tags, never plaintext ids |
+| **Backups** | Optional encrypted `.veilbackup` file (AES-256-GCM, PBKDF2-SHA-256 600k, authenticated records with truncation detection) for moving devices or recovering after a forgotten passphrase |
 | **Files** | Any size up to 4 GB, streamed in encrypted 64 KiB frames with backpressure, stored in 1 MiB sealed chunks, SHA-256 verified on arrival |
 | **Hardening** | Strict CSP, Trusted Types, no third-party scripts, no analytics, no inline code, pinned dependencies, pinned CI actions |
 

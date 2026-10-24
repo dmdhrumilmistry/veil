@@ -4,7 +4,7 @@ import * as idb from './idb';
 import type { Vault } from './vault';
 
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
-export type FileState = 'offered' | 'transferring' | 'done' | 'failed' | 'declined' | 'canceled';
+export type FileState = 'offered' | 'transferring' | 'done' | 'failed' | 'declined' | 'canceled' | 'removed';
 
 export interface FileMeta {
   fileId: string;
@@ -43,6 +43,16 @@ export interface Contact {
   /** 0 = off, else seconds. */
   disappearSecs: number;
   unread: number;
+  /** Last message summary for the chat list (stored encrypted like everything else). */
+  preview?: MessagePreview;
+}
+
+export interface MessagePreview {
+  kind: 'text' | 'file';
+  text: string;
+  dir: 'in' | 'out';
+  ts: number;
+  expiresAt?: number;
 }
 
 export interface Settings {
@@ -58,6 +68,8 @@ export interface Settings {
   notifications: boolean;
   /** Show contact names in notifications (visible on lock screens). */
   notifyNames: boolean;
+  /** Epoch ms of the last successful backup (0 = never). */
+  lastBackupAt: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -72,13 +84,14 @@ export const DEFAULT_SETTINGS: Settings = {
   enterToSend: true,
   notifications: false,
   notifyNames: false,
+  lastBackupAt: 0,
 };
 
 export interface Profile {
   name: string;
 }
 
-interface StoredIdentity {
+export interface StoredIdentity {
   pub: string;
   pkcs8: string;
 }
@@ -96,6 +109,17 @@ export class Repo {
     await this.vault.putJson('kv', 'identity', { pub: toB64u(identity.pub), pkcs8: toB64u(pkcs8) } satisfies StoredIdentity);
     pkcs8.fill(0);
     return identity;
+  }
+
+  /** Raw identity record, only for writing an encrypted backup. */
+  exportIdentity(): Promise<StoredIdentity | undefined> {
+    return this.vault.getJson<StoredIdentity>('kv', 'identity');
+  }
+
+  async importIdentity(s: StoredIdentity): Promise<void> {
+    if (typeof s?.pub !== 'string' || typeof s?.pkcs8 !== 'string' || fromB64u(s.pub).length !== 32) throw new Error('invalid identity in backup');
+    await importIdentityPrivate(fromB64u(s.pkcs8)); // validates the key before we store it
+    await this.vault.putJson('kv', 'identity', { pub: s.pub, pkcs8: s.pkcs8 } satisfies StoredIdentity);
   }
 
   async loadIdentity(): Promise<Identity | undefined> {

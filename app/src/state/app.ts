@@ -6,7 +6,8 @@ import { acceptAnswer, acceptOffer, createPeer, makeOffer, type PeerLink } from 
 import { Session, type AppMessage } from '../net/session';
 import { decodeSignal, encodeSignal, extractCode, signalLink } from '../net/signaling';
 import * as idb from '../storage/idb';
-import { CHUNK_STORE_SIZE, Repo, type Contact, type FileMeta, type Message, type Settings } from '../storage/repo';
+import { BackupWriter, readBackup } from '../storage/backup';
+import { CHUNK_STORE_SIZE, DEFAULT_SETTINGS, Repo, type Contact, type FileMeta, type Message, type MessagePreview, type Settings, type StoredIdentity } from '../storage/repo';
 import { Vault } from '../storage/vault';
 import { clearNotifications, notify, onNotificationOpen, resetNotifications } from './notify';
 import { store, toast, type AppState } from './store';
@@ -116,7 +117,7 @@ async function enter() {
   store.set({ phase: 'ready', myId: peerId(identity!.pub), profile, settings, contacts: sortContacts(contacts), messages: {}, presence: {}, view: 'chats' });
   armAutoLock();
   sweepTimer = setInterval(() => void sweepExpired(), 10_000);
-  void sweepExpired();
+  void sweepExpired(true);
   if (pendingCode) {
     const c = pendingCode;
     pendingCode = undefined;
@@ -125,6 +126,13 @@ async function enter() {
 }
 
 export function lock(reason?: string) {
+  teardown();
+  store.set({ phase: 'locked' });
+  if (reason) toast(reason);
+}
+
+/** Closes every connection and forgets all keys and decrypted data held in memory. */
+function teardown() {
   for (const s of sessions.values()) s.close('Locked');
   sessions.clear();
   pending?.link.pc.close();
@@ -139,8 +147,7 @@ export function lock(reason?: string) {
   clearInterval(sweepTimer);
   for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   objectUrls.clear();
-  store.set({ phase: 'locked', contacts: [], messages: {}, presence: {}, typing: {}, activeChat: undefined, connect: null, progress: {}, myId: '' });
-  if (reason) toast(reason);
+  store.set({ contacts: [], messages: {}, presence: {}, typing: {}, activeChat: undefined, connect: null, progress: {}, myId: '' });
 }
 
 export async function wipeEverything() {
@@ -235,6 +242,7 @@ export async function deleteContact(id: string) {
 export async function clearChat(id: string) {
   await R().clearChat(id);
   store.set((s) => ({ messages: { ...s.messages, [id]: [] } }));
+  await setPreview(id, undefined);
 }
 
 export async function openChat(id: string | undefined) {
@@ -279,6 +287,23 @@ async function addMessage(m: Message) {
   } else {
     await setMessage(m, false);
   }
+  if (!m.id.startsWith('sys-')) await setPreview(m.chat, previewOf(m));
+}
+
+function previewOf(m: Message): MessagePreview {
+  return { kind: m.kind, text: m.kind === 'file' ? m.file!.name : (m.text ?? '').slice(0, 120), dir: m.dir, ts: m.ts, expiresAt: m.expiresAt };
+}
+
+async function setPreview(chat: string, preview: MessagePreview | undefined) {
+  const c = contact(chat);
+  if (c && JSON.stringify(c.preview) !== JSON.stringify(preview)) await upsertContact({ ...c, preview });
+}
+
+/** Recompute the chat-list preview after deletions so removed text never lingers there. */
+async function refreshPreview(chat: string) {
+  const list = S().messages[chat] ?? (await R().listMessages(chat));
+  const last = [...list].reverse().find((m) => !m.id.startsWith('sys-'));
+  await setPreview(chat, last ? previewOf(last) : undefined);
 }
 
 async function addSystemNote(chat: string, text: string) {
@@ -330,6 +355,7 @@ export async function deleteMessage(m: Message) {
   await R().deleteMessage(m);
   revokeUrl(m.file?.fileId);
   store.set((s) => ({ messages: { ...s.messages, [m.chat]: (s.messages[m.chat] ?? []).filter((x) => x.id !== m.id) } }));
+  await refreshPreview(m.chat);
 }
 
 async function touch(chat: string, unreadDelta = 0) {
@@ -337,17 +363,23 @@ async function touch(chat: string, unreadDelta = 0) {
   if (c) await upsertContact({ ...c, lastSeen: Date.now(), unread: c.unread + unreadDelta });
 }
 
-async function sweepExpired() {
+async function sweepExpired(full = false) {
   if (!repo) return;
   const now = Date.now();
-  for (const [chat, list] of Object.entries(S().messages)) {
+  for (const list of Object.values(S().messages)) {
     for (const m of list) if (m.expiresAt && m.expiresAt <= now) await deleteMessage(m);
-    void chat;
   }
-  // Also catch expired messages in chats not loaded into memory.
+  // Chats not loaded into memory: always on unlock, then only where a timer is set.
   for (const c of S().contacts) {
-    if (S().messages[c.id] || !c.disappearSecs) continue;
-    for (const m of await R().listMessages(c.id)) if (m.expiresAt && m.expiresAt <= now) await R().deleteMessage(m);
+    if (S().messages[c.id] || !(full || c.disappearSecs || (c.preview?.expiresAt ?? Infinity) <= now)) continue;
+    let removed = false;
+    for (const m of await R().listMessages(c.id)) {
+      if (m.expiresAt && m.expiresAt <= now) {
+        await R().deleteMessage(m);
+        removed = true;
+      }
+    }
+    if (removed) await refreshPreview(c.id);
   }
 }
 
@@ -870,4 +902,163 @@ function listenForHandoffs() {
       })
       .catch(() => {});
   };
+}
+
+// ------------------------------------------------------------------ encrypted backup / restore
+
+export interface BackupProgress {
+  phase: 'preparing' | 'writing' | 'verifying' | 'restoring';
+  done: number;
+  total: number;
+}
+
+interface Sink {
+  write(b: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+}
+
+type SavePicker = (o: object) => Promise<{ createWritable(): Promise<{ write(b: BufferSource): Promise<void>; close(): Promise<void> }> }>;
+
+/** Streams to disk via the File System Access API when available, else builds a Blob. */
+async function openSink(name: string): Promise<{ sink: Sink; finish(): Blob | undefined }> {
+  const picker = (window as unknown as { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
+  if (picker) {
+    const handle = await picker({ suggestedName: name, types: [{ description: 'Veil backup', accept: { 'application/octet-stream': ['.veilbackup'] } }] });
+    const w = await handle.createWritable();
+    return { sink: { write: (b) => w.write(b as BufferSource), close: () => w.close() }, finish: () => undefined };
+  }
+  const parts: BlobPart[] = [];
+  return {
+    sink: { write: async (b) => void parts.push(b as BlobPart), close: async () => {} },
+    finish: () => new Blob(parts, { type: 'application/octet-stream' }),
+  };
+}
+
+export function backupFileName() {
+  return `veil-backup-${new Date().toISOString().slice(0, 10)}.veilbackup`;
+}
+
+/**
+ * Writes an encrypted backup. Returns a Blob to download when the browser could not
+ * stream straight to a file (otherwise the file is already saved).
+ */
+export async function createBackup(passphrase: string, includeFiles: boolean, onProgress: (p: BackupProgress) => void): Promise<Blob | undefined> {
+  const r = R();
+  onProgress({ phase: 'preparing', done: 0, total: 1 });
+  const identity = await r.exportIdentity();
+  if (!identity) throw new Error('Identity missing');
+  const contacts = await r.listContacts();
+  const chats = await Promise.all(contacts.map((c) => r.listMessages(c.id)));
+  const now = Date.now();
+  const messages = chats.flat().filter((m) => !m.expiresAt || m.expiresAt > now);
+  const files = includeFiles ? messages.filter((m) => m.file?.state === 'done' && m.file.chunks > 0) : [];
+  const total = files.reduce((n, m) => n + m.file!.size, 0) + 1;
+
+  const { sink, finish } = await openSink(backupFileName());
+  try {
+    const w = await BackupWriter.create(passphrase);
+    await sink.write(w.header);
+    await sink.write(await w.json('identity', identity));
+    await sink.write(await w.json('profile', S().profile));
+    await sink.write(await w.json('settings', { ...S().settings, lastBackupAt: 0 }));
+    for (const c of contacts) await sink.write(await w.json('contact', { ...c, unread: 0 }));
+    const included = new Set(files.map((m) => m.id));
+    for (const m of messages) {
+      const keep = !m.file || included.has(m.id) || m.file.state !== 'done';
+      const msg = keep ? m : { ...m, file: { ...m.file!, state: 'removed', chunks: 0 } };
+      await sink.write(await w.json('message', msg));
+    }
+    let done = 0;
+    for (const m of files) {
+      for (let i = 0; i < m.file!.chunks; i++) {
+        const data = await r.getFileChunk(m.file!.fileId, i);
+        if (!data) continue;
+        await sink.write(await w.chunk(m.file!.fileId, i, data));
+        done += data.length;
+        onProgress({ phase: 'writing', done, total });
+      }
+    }
+    await sink.write(await w.end());
+    await sink.close();
+  } catch (err) {
+    await sink.close().catch(() => {});
+    throw err;
+  }
+  await saveSettings({ lastBackupAt: Date.now() });
+  onProgress({ phase: 'writing', done: total, total });
+  return finish();
+}
+
+/** Decrypts and checks the whole backup without writing anything. Returns a summary. */
+export async function inspectBackup(file: Blob, passphrase: string, onProgress?: (p: BackupProgress) => void) {
+  let contacts = 0;
+  let messages = 0;
+  let name = '';
+  let identity = false;
+  for await (const e of readBackup(file, passphrase, (done, total) => onProgress?.({ phase: 'verifying', done, total }))) {
+    if (e.type !== 'json') continue;
+    if (e.k === 'contact') contacts++;
+    else if (e.k === 'message') messages++;
+    else if (e.k === 'identity') identity = true;
+    else if (e.k === 'profile') name = String((e.d as { name?: unknown })?.name ?? '');
+  }
+  if (!identity) throw new Error('This backup has no identity key');
+  return { contacts, messages, name };
+}
+
+/**
+ * Replaces everything on this device with the backup's contents, protected by a new
+ * device passphrase. The backup is fully verified first; if writing fails midway the
+ * partial data is wiped so the device never ends up half-restored.
+ */
+export async function restoreBackup(file: Blob, backupPass: string, devicePass: string, onProgress: (p: BackupProgress) => void) {
+  const report = (p: BackupProgress) => {
+    onProgress(p);
+    store.set({ restoring: p });
+  };
+  const back = S().phase;
+  store.set({ phase: 'restoring' });
+  try {
+    await inspectBackup(file, backupPass, report);
+  } catch (err) {
+    store.set({ phase: back, restoring: undefined });
+    throw err;
+  }
+  teardown();
+  await idb.wipeDatabase();
+  try {
+    const vault = await Vault.create(devicePass);
+    const r = new Repo(vault);
+    for await (const e of readBackup(file, backupPass, (done, total) => report({ phase: 'restoring', done, total }))) {
+      if (e.type === 'chunk') {
+        await r.putFileChunk(e.fileId, e.index, e.data);
+        continue;
+      }
+      const d = e.d as Record<string, unknown>;
+      if (e.k === 'identity') await r.importIdentity(d as unknown as StoredIdentity);
+      else if (e.k === 'profile') await r.saveProfile({ name: String(d.name ?? '').slice(0, MAX_NAME) });
+      else if (e.k === 'settings') await r.saveSettings({ ...DEFAULT_SETTINGS, ...(d as Partial<Settings>), notifications: false, lastBackupAt: 0 });
+      else if (e.k === 'contact' && typeof d.id === 'string') await r.saveContact(d as unknown as Contact);
+      else if (e.k === 'message' && typeof d.chat === 'string' && typeof d.id === 'string') {
+        const m = d as unknown as Message;
+        // Transfers cannot resume after a restore.
+        if (m.file && (m.file.state === 'transferring' || m.file.state === 'offered')) m.file = { ...m.file, state: 'failed', chunks: 0 };
+        if (m.status === 'sending') m.status = 'failed';
+        await r.saveMessage(m);
+      }
+    }
+    repo = r;
+    identity = await r.loadIdentity();
+    if (!identity) throw new Error('Identity missing after restore');
+    await idb.requestPersistence();
+    store.set({ restoring: undefined });
+    await enter();
+    toast('Backup restored. Reconnect with contacts to keep chatting.', 'success', 6000);
+  } catch (err) {
+    repo = undefined;
+    identity = undefined;
+    await idb.wipeDatabase();
+    store.set({ phase: 'onboarding', restoring: undefined });
+    throw err;
+  }
 }

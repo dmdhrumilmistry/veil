@@ -1,5 +1,6 @@
 import { createInvite, startJoin } from '../state/app';
 import { useApp } from '../state/store';
+import { RestoringScreen } from './Backup';
 import { Chat } from './Chat';
 import { ConnectSheet } from './ConnectSheet';
 import { Handoff, LockScreen, Onboarding, Unsupported } from './Gate';
@@ -12,7 +13,10 @@ function Toasts() {
   return (
     <div class="toasts" role="status" aria-live="polite">
       {toasts.map((t) => (
-        <div key={t.id} class={`toast ${t.kind}`}>{t.text}</div>
+        <div key={t.id} class={`toast ${t.kind}`}>
+          <Icon name={t.kind === 'error' ? 'alert' : t.kind === 'success' ? 'check' : 'info'} size={18} />
+          <span>{t.text}</span>
+        </div>
       ))}
     </div>
   );
@@ -66,6 +70,7 @@ export function App() {
       {phase === 'onboarding' && <Onboarding />}
       {phase === 'locked' && <LockScreen />}
       {phase === 'handoff' && <Handoff />}
+      {phase === 'restoring' && <RestoringScreen />}
       {phase === 'ready' && <Main />}
       <Toasts />
     </>

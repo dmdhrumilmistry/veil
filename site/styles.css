@@ -741,6 +741,8 @@ ul, ol { margin: 0; padding: 0; }
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+/* A lone card on the last row of the 3-column grid spans the full width. */
+@media (min-width: 961px) { .feature-grid > .feature:last-child:nth-child(3n + 1) { grid-column: 1 / -1; } }
 @media (max-width: 960px) { .feature-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 620px) { .feature-grid { grid-template-columns: 1fr; } .feature { padding: 22px; } }
 

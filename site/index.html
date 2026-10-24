@@ -211,6 +211,11 @@
           <p>Fresh ephemeral keys every session and a per-message key chain. Each message key is deleted after use.</p>
         </article>
         <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 19h14"/></svg></div>
+          <h3>Encrypted backups</h3>
+          <p>Export everything to one encrypted file you control, and restore it on a new device. No cloud account involved.</p>
+        </article>
+        <article class="card feature reveal">
           <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
           <h3>Verified contacts</h3>
           <p>Compare a 60-digit safety number or scan a QR code. Veil warns you if a contact's identity key ever changes.</p>
@@ -537,7 +542,11 @@
         </details>
         <details class="reveal">
           <summary>What happens if I forget my passphrase?</summary>
-          <p>Your local data is encrypted under a key that only your passphrase can unlock, and there is no account or server that could reset it. Choose a passphrase you will remember.</p>
+          <p>Your local data is encrypted under a key that only your passphrase can unlock, and there is no account or server that could reset it. That is why Veil offers encrypted backups: create one in Settings, keep the file somewhere safe, and you can restore your identity, contacts and chats on any device - even if you forget your device passphrase.</p>
+        </details>
+        <details class="reveal">
+          <summary>How do backups work without a cloud?</summary>
+          <p>Veil writes a single <b>.veilbackup</b> file that you keep wherever you like - a USB drive, your own cloud storage, another computer. It is encrypted with AES-256-GCM under a backup passphrase (PBKDF2-SHA-256, 600,000 iterations) and sealed record by record, so tampering or a half-copied file is detected before anything is restored. Photos and files are optional. Nobody can open it without the backup passphrase.</p>
         </details>
         <details class="reveal">
           <summary>Does Veil track me?</summary>

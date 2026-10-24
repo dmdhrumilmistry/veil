@@ -4,7 +4,7 @@
  * strict CSP produced no violations. Run after `npm run build`.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 const PORT = 4200 + Math.floor(Math.random() * 700);
@@ -32,6 +32,8 @@ const problems = [];
 
 async function peer(name, viewport) {
   const ctx = await browser.newContext({ viewport, permissions: ['clipboard-read', 'clipboard-write', 'notifications'] });
+  // Force the download path; the native save picker cannot be driven headlessly.
+  await ctx.addInitScript(() => { delete window.showSaveFilePicker; });
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() === 'error' || /Content Security Policy|TrustedHTML|Trusted Type/i.test(m.text())) problems.push(`${name}: ${m.text()}`);
@@ -80,8 +82,8 @@ try {
   // Alice completes the connection.
   await alice.getByLabel('Their reply code').fill(answer);
   await alice.getByRole('button', { name: 'Connect', exact: true }).click();
-  await alice.getByText('Connected - end-to-end encrypted').waitFor({ timeout: 20000 });
-  await bob.getByText('Connected - end-to-end encrypted').waitFor({ timeout: 20000 });
+  await alice.getByText('End-to-end encrypted', { exact: true }).waitFor({ timeout: 20000 });
+  await bob.getByText('End-to-end encrypted', { exact: true }).waitFor({ timeout: 20000 });
   console.log('connected + handshake verified');
 
   // Messages both ways.
@@ -120,7 +122,7 @@ try {
     Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  await bob.getByRole('button', { name: 'Back' }).click();
+  await bob.getByRole('button', { name: 'Back', exact: true }).click();
   await bob.getByRole('button', { name: /Alice/ }).first().click();
   await bob.getByText('secret notification test').waitFor();
   let left = -1;
@@ -146,7 +148,6 @@ try {
   // Bob saves the file and we compare bytes.
   const [dl] = await Promise.all([bob.waitForEvent('download'), bob.getByRole('button', { name: 'Save' }).click()]);
   const path = await dl.path();
-  const { readFileSync } = await import('node:fs');
   if (!readFileSync(path).equals(buf)) fail('downloaded file differs');
   console.log('downloaded bytes match');
 
@@ -164,7 +165,7 @@ try {
   await shot(bob, 'mobile-safety.png');
 
   // Lock, then unlock and confirm history decrypts from disk.
-  await alice.getByRole('button', { name: 'Back' }).click();
+  await alice.getByRole('button', { name: 'Back', exact: true }).click();
   await alice.getByRole('button', { name: 'Lock now' }).click();
   await alice.getByRole('heading', { name: 'Veil is locked' }).waitFor();
   await shot(alice, 'desktop-lock.png');
@@ -176,6 +177,48 @@ try {
   await alice.getByRole('button', { name: /Bob/ }).first().click();
   await alice.getByText('Hello Bob, this never touches a server').waitFor();
   console.log('lock/unlock + encrypted history ok');
+
+  // Encrypted backup from Alice, restored onto a brand-new device.
+  const BK = 'backup passphrase 2026!';
+  await alice.getByRole('button', { name: 'Settings' }).click();
+  await alice.getByRole('button', { name: 'Create backup' }).click();
+  await alice.getByLabel('Backup passphrase').fill(BK);
+  await alice.getByLabel('Confirm').fill(BK);
+  const [bk] = await Promise.all([alice.waitForEvent('download', { timeout: 60000 }), alice.locator('dialog').getByRole('button', { name: 'Create backup' }).click()]);
+  const bkPath = await bk.path();
+  if (!bk.suggestedFilename().endsWith('.veilbackup')) fail('unexpected backup name');
+  const bkBytes = readFileSync(bkPath);
+  if (bkBytes.includes(Buffer.from('Hello Bob')) || bkBytes.includes(Buffer.from('Alice'))) fail('plaintext in backup file');
+  await alice.getByRole('button', { name: 'Done' }).click();
+  await alice.getByText('Last backup today').waitFor();
+  console.log(`backup ok (${(bkBytes.length / 1024 / 1024).toFixed(1)} MB, no plaintext)`);
+  await shot(alice, 'desktop-settings.png');
+
+  const carolCtx = await browser.newContext({ viewport: { width: 1200, height: 820 } });
+  const carol = await carolCtx.newPage();
+  carol.on('pageerror', (e) => problems.push(`Carol pageerror: ${e.message}`));
+  await carol.goto(BASE);
+  await carol.getByRole('button', { name: 'Restore from a backup' }).click();
+  await carol.locator('input[type=file]').setInputFiles(bkPath);
+  await carol.getByLabel('Backup passphrase').fill('definitely wrong passphrase');
+  await carol.getByRole('button', { name: 'Unlock backup' }).click();
+  await carol.getByText('Incorrect backup passphrase').waitFor({ timeout: 30000 });
+  await carol.getByLabel('Backup passphrase').fill(BK);
+  await carol.getByRole('button', { name: 'Unlock backup' }).click();
+  await carol.getByText('Backup verified').waitFor({ timeout: 60000 });
+  await shot(carol, 'restore-summary.png');
+  await carol.getByRole('button', { name: 'Restore', exact: true }).click();
+  await carol.getByRole('button', { name: /Bob/ }).first().waitFor({ timeout: 60000 });
+  await carol.getByRole('button', { name: /Bob/ }).first().click();
+  await carol.getByText('Hello Bob, this never touches a server').waitFor();
+  await carol.locator('.file-card.done').first().waitFor();
+  // The restored device unlocks with the backup passphrase and has Alice's identity.
+  await carol.getByRole('button', { name: 'Lock now' }).click();
+  await carol.getByPlaceholder('Passphrase').fill(BK);
+  await carol.getByRole('button', { name: 'Unlock' }).click();
+  await carol.getByRole('button', { name: /Bob/ }).first().waitFor();
+  console.log('restore onto new device ok (identity, contacts, messages, files)');
+  await shot(carol, 'restored-desktop.png');
 
   // Data at rest must not contain plaintext.
   const leaked = await alice.evaluate(async () => {

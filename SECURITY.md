@@ -18,6 +18,7 @@ Please report security problems privately through **GitHub Security Advisories**
 | **Tampering, replay, reordering** | AEAD with strict sequence numbers. Any failure tears down the session. Files are SHA-256 verified end to end. |
 | **Device theft while locked** | All data is encrypted at rest. The passphrase is stretched with PBKDF2-SHA-256 (600,000 iterations). Lookup keys are HMAC tags, so even contact identifiers are not visible. |
 | **XSS / script injection** | Strict CSP (`default-src 'none'`, `script-src 'self'`), Trusted Types enforced, no `innerHTML`, no inline scripts or styles, no third-party code. Only inert media types render inline. Everything else downloads as `application/octet-stream`. |
+| **Backup file theft** | Backups are encrypted with AES-256-GCM under a separate passphrase (PBKDF2-SHA-256, 600k) and authenticated record by record. Tampering or truncation is detected before anything is restored. |
 | **Notification leaks** | OS notifications never include message content. Sender names are opt-in. Notification payloads carry a random in-memory token, never a contact id. |
 
 ### What Veil does not protect against
@@ -25,6 +26,7 @@ Please report security problems privately through **GitHub Security Advisories**
 - **A compromised device or browser.** Malware, malicious extensions, or someone with your unlocked device can read what you can read.
 - **Metadata visible to the network.** Your peer, STUN servers and observers can see your IP address and when you are connected. Use a VPN or Tor-capable TURN setup if this matters to you.
 - **The hosting origin.** The app is served from GitHub Pages. Whoever controls that origin could ship modified code, as with any web app. A service worker caches the app for offline use. For the strongest guarantees, build from source and self-host, or pin a reviewed release.
+- **Backup handling.** A backup contains your identity key. Anyone holding the file *and* its passphrase can impersonate you, so store it like a password vault export. Restoring the same backup on two devices gives both the same identity.
 - **Weak passphrases.** PBKDF2 slows guessing but cannot save a short passphrase. Veil requires at least 10 characters and a minimum strength.
 - **Unverified first contact.** If you never compare safety numbers and the invite channel was compromised, an active attacker could sit in the middle from the start (trust on first use).
 - **Screenshots and the other person.** End-to-end encryption ends at the other person's screen.

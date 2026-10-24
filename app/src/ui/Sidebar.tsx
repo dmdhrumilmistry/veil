@@ -45,18 +45,25 @@ export function Sidebar() {
         </div>
       )}
 
-      <nav class="contact-list">
-        {list.length === 0 && contacts.length === 0 && (
+      <nav class="contact-list" aria-label="Chats">
+        {contacts.length === 0 && (
           <div class="side-empty">
-            <p>No contacts yet.</p>
-            <p class="muted">Create an invite and send it to someone you trust.</p>
+            <div class="side-empty-art" aria-hidden="true"><Logo size={44} /></div>
+            <h3>Start your first private chat</h3>
+            <ol class="mini-steps">
+              <li><span>1</span> Create an invite</li>
+              <li><span>2</span> Send it to someone you trust</li>
+              <li><span>3</span> Paste their reply - you are connected</li>
+            </ol>
           </div>
         )}
+        {contacts.length > 0 && list.length === 0 && <p class="muted center pad">No chats match "{q}"</p>}
         {list.map((c) => {
           const isTyping = (typing[c.id] ?? 0) > Date.now() - 4000;
           const online = presence[c.id] === 'online';
+          const p = c.preview && (!c.preview.expiresAt || c.preview.expiresAt > Date.now()) ? c.preview : undefined;
           return (
-            <button key={c.id} class={`contact ${activeChat === c.id ? 'active' : ''}`} aria-current={activeChat === c.id ? 'true' : undefined} onClick={() => void openChat(c.id)}>
+            <button key={c.id} class={`contact ${activeChat === c.id ? 'active' : ''} ${c.unread ? 'unread' : ''}`} aria-current={activeChat === c.id ? 'true' : undefined} onClick={() => void openChat(c.id)}>
               <Avatar contact={c} online={online} />
               <span class="contact-main">
                 <span class="contact-top">
@@ -64,10 +71,24 @@ export function Sidebar() {
                     {displayName(c)}
                     {c.verified && <Icon name="shieldCheck" size={14} class="verified" />}
                   </span>
-                  <span class="contact-time">{relativeTime(c.lastSeen)}</span>
+                  <span class="contact-time">{relativeTime(p?.ts ?? c.lastSeen)}</span>
                 </span>
                 <span class="contact-sub">
-                  <span class={isTyping ? 'typing-text' : 'muted'}>{isTyping ? 'typing...' : online ? 'Connected' : 'Offline'}</span>
+                  <span class={`preview ${isTyping ? 'typing-text' : ''}`}>
+                    {isTyping ? (
+                      'typing...'
+                    ) : p ? (
+                      <>
+                        {p.dir === 'out' && <span class="you">You: </span>}
+                        {p.kind === 'file' && <Icon name="clip" size={13} />}
+                        {p.text}
+                      </>
+                    ) : online ? (
+                      'Connected'
+                    ) : (
+                      'No messages yet'
+                    )}
+                  </span>
                   {c.unread > 0 && <span class="badge" aria-label={`${c.unread} unread`}>{c.unread > 99 ? '99+' : c.unread}</span>}
                 </span>
               </span>

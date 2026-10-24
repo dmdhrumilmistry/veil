@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type { Contact, Message, Profile, Settings } from '../storage/repo';
 import { DEFAULT_SETTINGS } from '../storage/repo';
 
-export type Phase = 'loading' | 'unsupported' | 'onboarding' | 'locked' | 'ready' | 'handoff';
+export type Phase = 'loading' | 'unsupported' | 'onboarding' | 'locked' | 'ready' | 'handoff' | 'restoring';
 
 export type ConnectFlow =
   | { mode: 'invite'; step: 'creating' | 'waiting' | 'connecting' | 'error'; code?: string; link?: string; error?: string; forContact?: string }
@@ -32,6 +32,7 @@ export interface AppState {
   progress: Record<string, number>;
   handoffMessage?: string;
   view: 'chats' | 'settings' | 'info';
+  restoring?: { phase: string; done: number; total: number };
 }
 
 type Listener = () => void;

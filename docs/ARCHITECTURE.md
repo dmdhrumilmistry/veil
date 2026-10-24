@@ -114,6 +114,24 @@ chunks/<HMAC(file)>/<index>    sealed 1 MiB file block
 
 Every record has a fresh 96-bit IV and uses its slot name as AAD, so records cannot be swapped. Changing the passphrase re-wraps the master key without re-encrypting data. Locking (manual, idle timeout, or `pagehide`) closes sessions, drops all keys and revokes object URLs.
 
+## Encrypted backups
+
+A backup is one portable `.veilbackup` file (see `app/src/storage/backup.ts`):
+
+```
+file      = "VEILBAK\x01" || u32 headerLen || header JSON { v: 1, kdf: "PBKDF2-SHA-256", iter: 600000, salt }
+key       = HKDF-SHA-256(PBKDF2(passphrase, salt, iter), salt = SHA-256(magic || headerLen || header), "veil/backup/v1")
+record    = u32 len || iv(12) || AES-256-GCM(key, iv, type || payload, aad = u64 index || final)
+types     = 0x01 JSON entry { k, d } | 0x02 file chunk (fileId, index, bytes) | 0xFF end { records }
+```
+
+- The backup passphrase is independent of the device passphrase, so a backup can be restored after the device passphrase is forgotten.
+- Hashing the header into the key detects header edits (a wrong key results). Record indexes and the final flag in the AAD detect reordering, splicing, dropped records, trailing data and truncation. A valid file ends with exactly one authenticated end record.
+- Contents: the identity key (PKCS#8), profile, settings, contacts, non-expired messages, and optionally file chunks. Files left out are marked "not included in backup". Unread counts, `lastBackupAt` and notification permission are reset on restore.
+- Writing streams straight to disk with the File System Access API where available. Otherwise it builds a Blob for download.
+- **Restore** first decrypts and authenticates the whole file without writing anything, then shows a summary. Only after the user confirms does it wipe the device, create a new vault (with the backup passphrase or a new one), and re-encrypt every record under fresh device keys. If anything fails midway, the partial data is wiped. In-flight transfers come back as failed.
+- Restore is offered on first launch, on the lock screen ("Forgot passphrase?") and in Settings.
+
 ## Notifications
 
 Veil has no push server, and Web Push would need one: a server holding your push subscription and waking your device, which reveals when you get messages. So notifications are **local**. The running app raises them when a message, file or new connection arrives on a live session while Veil is not in front. That covers the cases that matter: if Veil is fully closed there is no connection, so nobody can message you.

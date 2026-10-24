@@ -16,9 +16,10 @@ import { store, toast, useApp } from '../state/store';
 import type { Contact } from '../storage/repo';
 import { WrongPassphraseError } from '../storage/vault';
 import { Avatar } from './common';
-import { MIN_PASSPHRASE, strength } from './Gate';
-import { Icon } from './icons';
+import { MIN_PASSPHRASE, strength } from './passphrase';
+import { Icon, Logo, type IconName } from './icons';
 import { InstallCard } from './Install';
+import { BackupCard } from './Backup';
 import { notifyPermission, requestNotifyPermission, type NotifyPermission } from '../state/notify';
 import { Qr } from './Qr';
 
@@ -174,7 +175,7 @@ function NotificationsCard() {
 
   return (
     <div class="card">
-      <h4>Notifications</h4>
+      <CardHead icon="bell" title="Notifications" />
       <label class="toggle">
         <input type="checkbox" checked={on} disabled={blocked} onChange={(e) => void toggle(e.currentTarget.checked)} />
         <span>Notify me about new messages and files</span>
@@ -193,90 +194,113 @@ function NotificationsCard() {
   );
 }
 
+function CardHead({ icon, title, sub }: { icon: IconName; title: string; sub?: string }) {
+  return (
+    <div class="card-head">
+      <span class="card-icon"><Icon name={icon} size={18} /></span>
+      <div>
+        <h4>{title}</h4>
+        {sub && <p class="small muted">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+function ThemePicker() {
+  const { settings } = useApp();
+  const opts: [typeof settings.theme, string][] = [['system', 'Auto'], ['light', 'Light'], ['dark', 'Dark']];
+  return (
+    <div class="seg three" role="radiogroup" aria-label="Theme">
+      {opts.map(([v, l]) => (
+        <button role="radio" aria-checked={settings.theme === v} class={settings.theme === v ? 'on' : ''} onClick={() => void saveSettings({ theme: v })}>
+          {l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function SettingsPanel() {
   const { settings, profile, myId } = useApp();
   const [name, setName] = useState(profile.name);
   const [stun, setStun] = useState(settings.stunUrls.join('\n'));
   const [turn, setTurn] = useState({ url: settings.turnUrl, user: settings.turnUser, pass: settings.turnPass });
   const [wipe, setWipe] = useState(false);
+  const [showKey, setShowKey] = useState(false);
 
   return (
     <section class="panel" aria-label="Settings">
       <PanelHead title="Settings" onBack={() => store.set({ view: 'chats' })} />
       <div class="panel-scroll">
-        <div class="card">
-          <h4>Profile</h4>
-          <label class="field">
-            <span>Display name</span>
-            <div class="input-row">
-              <input value={name} maxLength={48} onInput={(e) => setName(e.currentTarget.value)} />
-              <button class="btn ghost sm" disabled={name === profile.name} onClick={() => void saveProfileName(name).then(() => toast('Saved', 'success', 1500))}>Save</button>
+        <div class="card profile-settings">
+          <div class="me-row">
+            <span class="avatar lg c0" aria-hidden="true">{(profile.name || '?').slice(0, 1).toUpperCase()}</span>
+            <div class="grow">
+              <div class="field">
+                <label for="set-name">Display name</label>
+                <div class="input-row">
+                  <input id="set-name" value={name} maxLength={48} onInput={(e) => setName(e.currentTarget.value)} />
+                  <button class="btn primary sm" disabled={name === profile.name} onClick={() => void saveProfileName(name).then(() => toast('Saved', 'success', 1500))}>Save</button>
+                </div>
+                <small>Shared with contacts when you connect.</small>
+              </div>
             </div>
-          </label>
-          <div class="field">
-            <span>Your identity key</span>
-            <code class="key">{myId}</code>
-            <small>This device's public key. It never leaves your device except inside invites you share.</small>
           </div>
+          <button class="link-btn left" onClick={() => setShowKey(!showKey)} aria-expanded={showKey}>
+            {showKey ? 'Hide' : 'Show'} my identity key
+          </button>
+          {showKey && <code class="key">{myId}</code>}
         </div>
 
-        <InstallCard />
+        <BackupCard />
 
         <NotificationsCard />
 
-        <div class="card">
-          <h4>Appearance &amp; behaviour</h4>
-          <label class="field">
-            <span>Theme</span>
-            <select value={settings.theme} onChange={(e) => void saveSettings({ theme: e.currentTarget.value as 'system' })}>
-              <option value="system">Match system</option>
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-            </select>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" checked={settings.enterToSend} onChange={(e) => void saveSettings({ enterToSend: e.currentTarget.checked })} />
-            <span>Press Enter to send</span>
-          </label>
-          <label class="field">
-            <span>Auto-accept files up to</span>
-            <select value={settings.autoAcceptMB} onChange={(e) => void saveSettings({ autoAcceptMB: Number(e.currentTarget.value) })}>
-              {[0, 5, 25, 100, 500].map((v) => <option value={v}>{v === 0 ? 'Always ask' : `${v} MB`}</option>)}
-            </select>
-          </label>
-        </div>
+        <InstallCard />
 
         <div class="card">
-          <h4>Security</h4>
-          <label class="field">
-            <span>Auto-lock after inactivity</span>
-            <select value={settings.autoLockMins} onChange={(e) => void saveSettings({ autoLockMins: Number(e.currentTarget.value) })}>
-              {[1, 5, 15, 60, 240, 0].map((v) => <option value={v}>{v === 0 ? 'Never' : v < 60 ? `${v} min` : `${v / 60} h`}</option>)}
+          <CardHead icon="lock" title="Privacy & security" sub="Locking closes connections and erases keys from memory." />
+          <div class="field">
+            <label for="set-lock">Auto-lock after inactivity</label>
+            <select id="set-lock" value={settings.autoLockMins} onChange={(e) => void saveSettings({ autoLockMins: Number(e.currentTarget.value) })}>
+              {[1, 5, 15, 60, 240, 0].map((v) => <option value={v}>{v === 0 ? 'Never' : v < 60 ? `${v} minutes` : `${v / 60} hour${v > 60 ? 's' : ''}`}</option>)}
             </select>
-            <small>Locking closes connections and erases keys from memory.</small>
-          </label>
+          </div>
           <ChangePassphrase />
           <button class="btn ghost" onClick={() => lock()}><Icon name="lock" size={18} /> Lock now</button>
         </div>
 
         <div class="card">
-          <h4>Network</h4>
+          <CardHead icon="sun" title="Appearance & chats" />
+          <ThemePicker />
+          <label class="toggle">
+            <input type="checkbox" checked={settings.enterToSend} onChange={(e) => void saveSettings({ enterToSend: e.currentTarget.checked })} />
+            <span>Press Enter to send <small class="muted">(Shift+Enter for a new line)</small></span>
+          </label>
+          <div class="field">
+            <label for="set-accept">Auto-accept files up to</label>
+            <select id="set-accept" value={settings.autoAcceptMB} onChange={(e) => void saveSettings({ autoAcceptMB: Number(e.currentTarget.value) })}>
+              {[0, 5, 25, 100, 500].map((v) => <option value={v}>{v === 0 ? 'Always ask' : `${v} MB`}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div class="card">
+          <CardHead icon="globe" title="Network" sub="How your device finds others. No server ever sees your messages." />
           <label class="toggle">
             <input type="checkbox" checked={settings.useStun} onChange={(e) => void saveSettings({ useStun: e.currentTarget.checked })} />
-            <span>Use STUN to connect across networks</span>
+            <span>Connect across networks with STUN <small class="muted">(off = same Wi-Fi only)</small></span>
           </label>
-          <small class="muted">
-            STUN servers only tell your device its public address - they never see messages. Turn off to connect only on the same local network.
-          </small>
           {settings.useStun && (
-            <label class="field">
-              <span>STUN servers (one per line)</span>
-              <textarea rows={2} value={stun} spellcheck={false} onInput={(e) => setStun(e.currentTarget.value)} onBlur={() => void saveSettings({ stunUrls: stun.split(/\s+/).filter(Boolean) })} />
-            </label>
+            <div class="field">
+              <label for="set-stun">STUN servers (one per line)</label>
+              <textarea id="set-stun" rows={2} value={stun} spellcheck={false} onInput={(e) => setStun(e.currentTarget.value)} onBlur={() => void saveSettings({ stunUrls: stun.split(/\s+/).filter(Boolean) })} />
+              <small>STUN only tells your device its public address.</small>
+            </div>
           )}
           <details>
             <summary>Custom TURN relay (for strict networks)</summary>
-            <p class="muted small">A TURN relay forwards traffic when a direct path is impossible. It only ever sees ciphertext. Use one you run or trust.</p>
+            <p class="muted small">Relays traffic when a direct path is impossible. It only ever sees ciphertext. Use one you run or trust.</p>
             <label class="field"><span>URL</span><input value={turn.url} placeholder="turns:turn.example.com:5349" onInput={(e) => setTurn({ ...turn, url: e.currentTarget.value })} /></label>
             <label class="field"><span>Username</span><input value={turn.user} autoComplete="off" onInput={(e) => setTurn({ ...turn, user: e.currentTarget.value })} /></label>
             <label class="field"><span>Credential</span><input type="password" autoComplete="off" value={turn.pass} onInput={(e) => setTurn({ ...turn, pass: e.currentTarget.value })} /></label>
@@ -285,10 +309,10 @@ export function SettingsPanel() {
         </div>
 
         <div class="card danger-zone">
-          <h4>Danger zone</h4>
+          <CardHead icon="trash" title="Erase this device" sub="Deletes every chat, file and key. Make a backup first." />
           {wipe ? (
             <>
-              <p>Permanently erase every chat, file and key on this device?</p>
+              <p>Permanently erase everything on this device?</p>
               <div class="row">
                 <button class="btn ghost sm" onClick={() => setWipe(false)}>Cancel</button>
                 <button class="btn danger sm" onClick={() => void wipeEverything()}>Erase everything</button>
@@ -298,7 +322,19 @@ export function SettingsPanel() {
             <button class="btn ghost danger-text" onClick={() => setWipe(true)}><Icon name="trash" size={18} /> Erase all data</button>
           )}
         </div>
-        <p class="fine center">Veil {__APP_VERSION__} - protocol v1 - open source</p>
+
+        <div class="card about">
+          <Logo size={36} />
+          <div>
+            <b>Veil {__APP_VERSION__}</b>
+            <p class="small muted">Protocol v1 - X25519 + ML-KEM-768 - AES-256-GCM</p>
+          </div>
+          <nav class="about-links" aria-label="About Veil">
+            <a href="../" target="_blank" rel="noopener">Website</a>
+            <a href="https://github.com/dmdhrumilmistry/veil" target="_blank" rel="noopener noreferrer">Source</a>
+            <a href="https://github.com/dmdhrumilmistry/veil/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">Security</a>
+          </nav>
+        </div>
       </div>
     </section>
   );

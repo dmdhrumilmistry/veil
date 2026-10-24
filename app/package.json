@@ -1,7 +1,7 @@
 {
   "name": "veil-app",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Veil - private peer-to-peer end-to-end encrypted chat and file sharing",
   "license": "MIT",

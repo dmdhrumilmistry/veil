@@ -4,24 +4,10 @@ import { useApp } from '../state/store';
 import { WrongPassphraseError } from '../storage/vault';
 import { Icon, Logo } from './icons';
 import { InstallCard } from './Install';
+import { RestoreFlow } from './Backup';
+import { MIN_PASSPHRASE, strength } from './passphrase';
 
-/** Rough strength estimate: charset entropy x length, with penalties for repetition. */
-export function strength(p: string): { score: 0 | 1 | 2 | 3 | 4; label: string } {
-  if (!p) return { score: 0, label: '' };
-  let pool = 0;
-  if (/[a-z]/.test(p)) pool += 26;
-  if (/[A-Z]/.test(p)) pool += 26;
-  if (/\d/.test(p)) pool += 10;
-  if (/[^A-Za-z0-9]/.test(p)) pool += 33;
-  const unique = new Set(p).size;
-  const bits = Math.log2(Math.max(pool, 2)) * Math.min(p.length, unique * 2.5);
-  if (bits < 40) return { score: 1, label: 'Weak' };
-  if (bits < 60) return { score: 2, label: 'Fair' };
-  if (bits < 80) return { score: 3, label: 'Strong' };
-  return { score: 4, label: 'Excellent' };
-}
 
-export const MIN_PASSPHRASE = 10;
 
 export function Onboarding() {
   const [step, setStep] = useState(0);
@@ -47,6 +33,21 @@ export function Onboarding() {
     }
   };
 
+  if (step === 2) {
+    return (
+      <main class="gate">
+        <div class="gate-card">
+          <button type="button" class="icon-btn gate-back" aria-label="Back" onClick={() => setStep(0)}>
+            <Icon name="back" />
+          </button>
+          <h1>Restore from backup</h1>
+          <p class="muted">Bring your identity, contacts and chats from another device.</p>
+          <RestoreFlow replacing={false} onCancel={() => setStep(0)} />
+        </div>
+      </main>
+    );
+  }
+
   if (step === 0) {
     return (
       <main class="gate">
@@ -60,6 +61,9 @@ export function Onboarding() {
             <li><Icon name="lock" size={18} /> Everything stays encrypted on this device</li>
           </ul>
           <button class="btn primary lg" onClick={() => setStep(1)}>Get started</button>
+          <button class="btn ghost" onClick={() => setStep(2)}>
+            <Icon name="download" size={18} /> Restore from a backup
+          </button>
           <InstallCard compact />
         </div>
       </main>
@@ -117,6 +121,7 @@ export function LockScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirmWipe, setConfirmWipe] = useState(false);
+  const [restore, setRestore] = useState(false);
 
   const submit = async (e: Event) => {
     e.preventDefault();
@@ -132,6 +137,18 @@ export function LockScreen() {
       await new Promise((r) => setTimeout(r, 600));
     }
   };
+
+  if (restore) {
+    return (
+      <main class="gate">
+        <div class="gate-card">
+          <h1>Restore from backup</h1>
+          <p class="muted">Your current data on this device will be replaced.</p>
+          <RestoreFlow replacing onCancel={() => setRestore(false)} />
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main class="gate">
@@ -160,7 +177,10 @@ export function LockScreen() {
               </div>
             </div>
           ) : (
-            <button type="button" class="link-btn muted" onClick={() => setConfirmWipe(true)}>Forgot passphrase? Reset this device</button>
+            <div class="stack center">
+              <button type="button" class="link-btn" onClick={() => setRestore(true)}>Forgot passphrase? Restore from a backup</button>
+              <button type="button" class="link-btn muted" onClick={() => setConfirmWipe(true)}>Reset this device</button>
+            </div>
           )}
         </div>
       </form>
