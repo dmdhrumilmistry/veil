@@ -3,6 +3,7 @@ import { createInvite, displayName, lock, openChat, startJoin } from '../state/a
 import { store, useApp } from '../state/store';
 import { Avatar, relativeTime } from './common';
 import { Icon, Logo } from './icons';
+import { InstallCard } from './Install';
 
 export function Sidebar() {
   const { contacts, activeChat, presence, typing, profile, view } = useApp();
@@ -74,6 +75,8 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      <InstallCard compact />
 
       <footer class="side-foot">
         <span class="me">

@@ -3,6 +3,7 @@ import { createAccount, unlock, wipeEverything } from '../state/app';
 import { useApp } from '../state/store';
 import { WrongPassphraseError } from '../storage/vault';
 import { Icon, Logo } from './icons';
+import { InstallCard } from './Install';
 
 /** Rough strength estimate: charset entropy x length, with penalties for repetition. */
 export function strength(p: string): { score: 0 | 1 | 2 | 3 | 4; label: string } {
@@ -59,6 +60,7 @@ export function Onboarding() {
             <li><Icon name="lock" size={18} /> Everything stays encrypted on this device</li>
           </ul>
           <button class="btn primary lg" onClick={() => setStep(1)}>Get started</button>
+          <InstallCard compact />
         </div>
       </main>
     );

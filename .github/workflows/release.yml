@@ -1,0 +1,139 @@
+name: Release
+
+# Push a tag like v0.2.0 (matching app/package.json) to:
+#   1. verify, test (unit + two-browser E2E) and build the app
+#   2. publish a GitHub Release with zipped builds, SHA-256 checksums and signed build provenance
+#   3. deploy the website (/) and app (/app/) to GitHub Pages (skipped for pre-releases like v1.0.0-rc.1)
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # signs the provenance attestation
+      attestations: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Check tag matches app/package.json version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          pkg="v$(node -p "require('./app/package.json').version")"
+          if [ "$TAG" != "$pkg" ]; then
+            echo "::error::Tag $TAG does not match app/package.json version $pkg"
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-* ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Install
+        working-directory: app
+        run: npm ci --ignore-scripts
+
+      - name: Audit, typecheck, unit tests, build
+        working-directory: app
+        run: |
+          npm audit --omit=dev --audit-level=high
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: End-to-end test (two real browsers over WebRTC)
+        working-directory: app
+        run: |
+          npx playwright install --with-deps chromium
+          SIZE_MB=8 npm run test:e2e
+
+      - name: Package release files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p _site/app release
+          cp -r site/. _site/
+          cp -r app/dist/. _site/app/
+          touch _site/.nojekyll
+          (cd app/dist && zip -qr -X "../../release/veil-app-$VERSION.zip" .)
+          (cd _site && zip -qr -X "../release/veil-website-and-app-$VERSION.zip" .)
+          (cd release && sha256sum *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: release/
+          if-no-files-found: error
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: release
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+        run: |
+          flags=(--verify-tag --generate-notes --title "Veil $TAG")
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          cat > notes.md <<NOTES
+          **Use it:** https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/app/
+
+          **Self-host:** unzip \`veil-app-$TAG.zip\` and serve it over HTTPS from any static host.
+
+          **Verify:** \`sha256sum -c SHA256SUMS.txt\` and \`gh attestation verify veil-app-$TAG.zip --repo $REPO\`
+          NOTES
+          gh release create "$TAG" release/* --repo "$REPO" --notes-file notes.md "${flags[@]}"
+
+  deploy:
+    needs: [build, release]
+    if: needs.build.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

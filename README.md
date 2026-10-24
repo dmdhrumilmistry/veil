@@ -71,7 +71,25 @@ npm run build        # production build with CSP injected
 npm run test:e2e     # two real browsers connect, chat, transfer a file (needs `npx playwright install chromium`)
 ```
 
-Pushing to `main` runs CI and deploys the website at `/` and the app at `/app/` on GitHub Pages.
+Pushing to `main` runs CI (audit, typecheck, unit tests, build, two-browser E2E).
+
+## Releasing
+
+Releases are tag-driven (`.github/workflows/release.yml`):
+
+```bash
+cd app && npm version 0.3.0 --no-git-tag-version && cd ..   # bump app/package.json
+git commit -am "Release v0.3.0" && git push
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+The tag must match `app/package.json`. The workflow re-runs every check, then:
+
+- publishes a **GitHub Release** with `veil-app-vX.Y.Z.zip` (self-hostable app), `veil-website-and-app-vX.Y.Z.zip`, `SHA256SUMS.txt` and auto-generated notes
+- signs **build provenance**, so anyone can verify a zip came from this repo's CI: `gh attestation verify veil-app-vX.Y.Z.zip --repo dmdhrumilmistry/veil`
+- deploys to **GitHub Pages**. Tags with a suffix (`v1.0.0-rc.1`) become pre-releases and are not deployed.
+
+Installed apps pick up the new version on their next launch (the service worker cache is versioned per build). To roll back, run the **Redeploy GitHub Pages** workflow manually with an older tag.
 
 ## Status
 

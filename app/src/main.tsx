@@ -1,5 +1,6 @@
 import { render } from 'preact';
 import { activity, boot, lock } from './state/app';
+import './state/install'; // must load early to catch beforeinstallprompt
 import { store } from './state/store';
 import { App } from './ui/App';
 import './styles/app.css';

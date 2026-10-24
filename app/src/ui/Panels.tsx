@@ -18,6 +18,7 @@ import { WrongPassphraseError } from '../storage/vault';
 import { Avatar } from './common';
 import { MIN_PASSPHRASE, strength } from './Gate';
 import { Icon } from './icons';
+import { InstallCard } from './Install';
 import { Qr } from './Qr';
 
 const TTL_OPTIONS: [number, string][] = [
@@ -180,6 +181,8 @@ export function SettingsPanel() {
             <small>This device's public key. It never leaves your device except inside invites you share.</small>
           </div>
         </div>
+
+        <InstallCard />
 
         <div class="card">
           <h4>Appearance &amp; behaviour</h4>
