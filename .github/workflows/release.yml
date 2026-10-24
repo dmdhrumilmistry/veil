@@ -80,7 +80,9 @@ jobs:
           (cd _site && zip -qr -X "../release/veil-website-and-app-$VERSION.zip" .)
           (cd release && sha256sum *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
+      # GitHub only supports attestations on public repos (or org-owned private repos on paid plans).
       - name: Attest build provenance
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/*.zip
@@ -112,6 +114,7 @@ jobs:
           TAG: ${{ needs.build.outputs.version }}
           PRERELEASE: ${{ needs.build.outputs.prerelease }}
           REPO: ${{ github.repository }}
+          PRIVATE: ${{ github.event.repository.private }}
         run: |
           flags=(--verify-tag --generate-notes --title "Veil $TAG")
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
@@ -120,8 +123,11 @@ jobs:
 
           **Self-host:** unzip \`veil-app-$TAG.zip\` and serve it over HTTPS from any static host.
 
-          **Verify:** \`sha256sum -c SHA256SUMS.txt\` and \`gh attestation verify veil-app-$TAG.zip --repo $REPO\`
+          **Verify:** \`sha256sum -c SHA256SUMS.txt\`
           NOTES
+          if [ "$PRIVATE" != "true" ]; then
+            echo "and \`gh attestation verify veil-app-$TAG.zip --repo $REPO\` (signed build provenance)" >> notes.md
+          fi
           gh release create "$TAG" release/* --repo "$REPO" --notes-file notes.md "${flags[@]}"
 
   deploy:
