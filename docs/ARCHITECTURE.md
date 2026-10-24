@@ -114,6 +114,18 @@ chunks/<HMAC(file)>/<index>    sealed 1 MiB file block
 
 Every record has a fresh 96-bit IV and uses its slot name as AAD, so records cannot be swapped. Changing the passphrase re-wraps the master key without re-encrypting data. Locking (manual, idle timeout, or `pagehide`) closes sessions, drops all keys and revokes object URLs.
 
+## Notifications
+
+Veil has no push server, and Web Push would need one: a server holding your push subscription and waking your device, which reveals when you get messages. So notifications are **local**. The running app raises them when a message, file or new connection arrives on a live session while Veil is not in front. That covers the cases that matter: if Veil is fully closed there is no connection, so nobody can message you.
+
+- Shown through the service worker (`registration.showNotification`). Android browsers and installed iOS apps reject `new Notification()`. On iOS/iPadOS, notifications require Veil to be added to the Home Screen.
+- **Never** includes message text. The sender's name is opt-in (`Show who it is from`), since it appears on lock screens.
+- One notification per conversation (`tag`). Newer messages replace it with a count and vibrate again (`renotify`).
+- The payload carries a random in-memory token, not a contact id. Tapping the notification focuses Veil and opens that chat (`notificationclick` → `postMessage`). Tokens are forgotten on lock.
+- Opening a chat or returning to the app clears its notifications. The unread total shows in the tab title and as an app-icon badge (Badging API, installed apps).
+- While Veil is visible but you are in another chat, an in-app toast appears instead.
+- Limits: phones suspend background web apps after a while (iOS within minutes), which drops the connection, and auto-lock disconnects on purpose.
+
 ## Web platform hardening
 
 - CSP (meta tag, since GitHub Pages cannot set headers): `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types veil-sw`.

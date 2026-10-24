@@ -38,3 +38,22 @@ self.addEventListener('fetch', (event) => {
   }
   event.respondWith(caches.match(req, { ignoreSearch: true }).then((hit) => hit || fetch(req)));
 });
+
+// Tapping a notification focuses the open Veil window and opens that conversation. The payload is an
+// opaque in-memory token, never a contact id; if Veil was closed meanwhile we simply open the app.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const token = event.notification.data?.token || '';
+  event.waitUntil(
+    (async () => {
+      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const win = wins.find((w) => w.focused) || wins[0];
+      if (win) {
+        await win.focus();
+        win.postMessage({ type: 'veil-open', token });
+        return;
+      }
+      await self.clients.openWindow('./');
+    })(),
+  );
+});

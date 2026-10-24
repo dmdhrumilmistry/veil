@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
 
-const PORT = 4179;
+const PORT = 4200 + Math.floor(Math.random() * 700);
 const BASE = `http://localhost:${PORT}/`;
 const SHOTS = process.env.SHOTS_DIR;
 const PASS = 'correct horse battery staple';
@@ -25,12 +25,13 @@ await new Promise((resolve, reject) => {
 });
 
 const browser = await chromium.launch({
+  channel: 'chromium', // full browser: headless-shell has no notification support
   args: ['--disable-features=WebRtcHideLocalIpsWithMdns', '--use-fake-ui-for-media-stream'],
 });
 const problems = [];
 
 async function peer(name, viewport) {
-  const ctx = await browser.newContext({ viewport, permissions: ['clipboard-read', 'clipboard-write'] });
+  const ctx = await browser.newContext({ viewport, permissions: ['clipboard-read', 'clipboard-write', 'notifications'] });
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() === 'error' || /Content Security Policy|TrustedHTML|Trusted Type/i.test(m.text())) problems.push(`${name}: ${m.text()}`);
@@ -92,6 +93,39 @@ try {
   await alice.getByText('Hi Alice! Post-quantum and peer-to-peer').waitFor();
   await alice.getByLabel('Read').first().waitFor({ timeout: 5000 });
   console.log('messages + read receipts ok');
+
+  // Notifications: Bob enables them, backgrounds Veil, Alice writes.
+  await bob.getByRole('button', { name: 'Back to chats' }).click();
+  await bob.getByRole('button', { name: 'Settings' }).click();
+  await bob.getByText('Notify me about new messages and files').click();
+  await bob.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await alice.getByLabel('Message', { exact: true }).fill('secret notification test');
+  await alice.keyboard.press('Enter');
+  let notes = [];
+  for (let i = 0; i < 50 && !notes.length; i++) {
+    notes = await bob.evaluate(async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      return ((await reg?.getNotifications()) ?? []).map((n) => ({ title: n.title, body: n.body }));
+    });
+    if (!notes.length) await bob.waitForTimeout(200);
+  }
+  if (!notes.length) fail('no notification shown');
+  if (JSON.stringify(notes).includes('secret')) fail('notification leaked message content');
+  if (notes[0].title !== 'Veil' || notes[0].body !== 'New message') fail(`unexpected notification ${JSON.stringify(notes)}`);
+  if (!(await bob.title()).startsWith('(1)')) fail(`unread count missing from title: ${await bob.title()}`);
+  await bob.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await bob.getByRole('button', { name: 'Back' }).click();
+  await bob.getByRole('button', { name: /Alice/ }).first().click();
+  await bob.getByText('secret notification test').waitFor();
+  const left = await bob.evaluate(async () => ((await (await navigator.serviceWorker.getRegistration())?.getNotifications()) ?? []).length);
+  if (left !== 0) fail('notification not cleared after opening chat');
+  console.log('notifications ok (no content, unread badge, cleared on open)');
 
   // File transfer (auto-accepted under the 25 MB default).
   const size = Number(process.env.SIZE_MB || 3) * 1024 * 1024 + 12345;

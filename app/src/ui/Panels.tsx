@@ -19,6 +19,7 @@ import { Avatar } from './common';
 import { MIN_PASSPHRASE, strength } from './Gate';
 import { Icon } from './icons';
 import { InstallCard } from './Install';
+import { notifyPermission, requestNotifyPermission, type NotifyPermission } from '../state/notify';
 import { Qr } from './Qr';
 
 const TTL_OPTIONS: [number, string][] = [
@@ -148,19 +149,56 @@ function ChangePassphrase() {
   );
 }
 
+const PERMISSION_HELP: Record<NotifyPermission, string | undefined> = {
+  granted: undefined,
+  default: undefined,
+  denied: 'Notifications are blocked for this site. Allow them in your browser or system settings, then turn this on again.',
+  unsupported: 'This browser does not support notifications.',
+  'needs-install': 'On iPhone and iPad, notifications only work after you add Veil to your Home Screen (see Install above).',
+};
+
+function NotificationsCard() {
+  const { settings } = useApp();
+  const [perm, setPerm] = useState<NotifyPermission>(notifyPermission());
+  const blocked = perm === 'denied' || perm === 'unsupported' || perm === 'needs-install';
+  const on = settings.notifications && perm === 'granted';
+
+  const toggle = async (want: boolean) => {
+    if (want) {
+      const p = await requestNotifyPermission();
+      setPerm(p);
+      if (p !== 'granted') return toast(PERMISSION_HELP[p] ?? 'Notifications were not allowed', 'error', 6000);
+    }
+    await saveSettings({ notifications: want });
+  };
+
+  return (
+    <div class="card">
+      <h4>Notifications</h4>
+      <label class="toggle">
+        <input type="checkbox" checked={on} disabled={blocked} onChange={(e) => void toggle(e.currentTarget.checked)} />
+        <span>Notify me about new messages and files</span>
+      </label>
+      {PERMISSION_HELP[perm] && <p class="callout warn"><Icon name="alert" size={18} /><span>{PERMISSION_HELP[perm]}</span></p>}
+      {on && (
+        <label class="toggle">
+          <input type="checkbox" checked={settings.notifyNames} onChange={(e) => void saveSettings({ notifyNames: e.currentTarget.checked })} />
+          <span>Show who it is from (visible on your lock screen)</span>
+        </label>
+      )}
+      <small class="muted">
+        Message text is never shown. Veil has no push server, so notifications arrive only while Veil is open or running in the background and connected. Phones may pause background apps after a while, and auto-lock disconnects you.
+      </small>
+    </div>
+  );
+}
+
 export function SettingsPanel() {
   const { settings, profile, myId } = useApp();
   const [name, setName] = useState(profile.name);
   const [stun, setStun] = useState(settings.stunUrls.join('\n'));
   const [turn, setTurn] = useState({ url: settings.turnUrl, user: settings.turnUser, pass: settings.turnPass });
   const [wipe, setWipe] = useState(false);
-
-  const enableNotifications = async (on: boolean) => {
-    if (on && 'Notification' in window && Notification.permission !== 'granted') {
-      if ((await Notification.requestPermission()) !== 'granted') return toast('Notifications were blocked', 'error');
-    }
-    await saveSettings({ notifications: on });
-  };
 
   return (
     <section class="panel" aria-label="Settings">
@@ -184,6 +222,8 @@ export function SettingsPanel() {
 
         <InstallCard />
 
+        <NotificationsCard />
+
         <div class="card">
           <h4>Appearance &amp; behaviour</h4>
           <label class="field">
@@ -197,10 +237,6 @@ export function SettingsPanel() {
           <label class="toggle">
             <input type="checkbox" checked={settings.enterToSend} onChange={(e) => void saveSettings({ enterToSend: e.currentTarget.checked })} />
             <span>Press Enter to send</span>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" checked={settings.notifications} onChange={(e) => void enableNotifications(e.currentTarget.checked)} />
-            <span>Notifications (content is never shown)</span>
           </label>
           <label class="field">
             <span>Auto-accept files up to</span>

@@ -8,6 +8,7 @@ import { decodeSignal, encodeSignal, extractCode, signalLink } from '../net/sign
 import * as idb from '../storage/idb';
 import { CHUNK_STORE_SIZE, Repo, type Contact, type FileMeta, type Message, type Settings } from '../storage/repo';
 import { Vault } from '../storage/vault';
+import { clearNotifications, notify, onNotificationOpen, resetNotifications } from './notify';
 import { store, toast, type AppState } from './store';
 
 /**
@@ -130,6 +131,7 @@ export function lock(reason?: string) {
   pending = undefined;
   outgoing.clear();
   incoming.clear();
+  resetNotifications();
   repo?.vault.lock();
   repo = undefined;
   identity = undefined;
@@ -238,6 +240,7 @@ export async function clearChat(id: string) {
 export async function openChat(id: string | undefined) {
   store.set({ activeChat: id, view: 'chats' });
   if (!id) return;
+  void clearNotifications(id);
   if (!S().messages[id]) {
     const msgs = await R().listMessages(id);
     store.set((s) => ({ messages: { ...s.messages, [id]: msgs } }));
@@ -380,7 +383,7 @@ async function onAppMessage(chat: string, m: AppMessage) {
       };
       await addMessage(msg);
       void s?.send({ t: 'receipt', s: 'delivered', ids: [m.id] }).catch(() => {});
-      await afterIncoming(chat, 'New message');
+      await afterIncoming(chat, 'message');
       return;
     }
     case 'receipt': {
@@ -419,23 +422,23 @@ async function onAppMessage(chat: string, m: AppMessage) {
   }
 }
 
-async function afterIncoming(chat: string, notice: string) {
-  const viewing = S().activeChat === chat && document.visibilityState === 'visible';
+async function afterIncoming(chat: string, kind: 'message' | 'file') {
+  const visible = document.visibilityState === 'visible';
+  const viewing = visible && S().activeChat === chat && S().view === 'chats';
   await touch(chat, viewing ? 0 : 1);
-  if (viewing) await markRead(chat);
-  else notify(notice);
-}
-
-function notify(body: string) {
-  if (!S().settings.notifications || document.visibilityState === 'visible') return;
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  // Never put message content or names in OS notifications - they leak onto lock screens.
-  try {
-    new Notification('Veil', { body, tag: 'veil', silent: false });
-  } catch {
-    /* some platforms only allow SW notifications */
+  if (viewing) return markRead(chat);
+  const c = contact(chat);
+  if (visible) {
+    // In the app but looking at another chat or panel: a quiet in-app hint.
+    if (c) toast(`${kind === 'file' ? 'File' : 'Message'} from ${displayName(c)}`);
+  } else {
+    void notify({ chat, kind, name: c ? displayName(c) : undefined });
   }
 }
+
+onNotificationOpen((chat) => {
+  if (S().phase === 'ready' && contact(chat)) void openChat(chat);
+});
 
 // ------------------------------------------------------------------ files
 
@@ -509,7 +512,7 @@ async function onFileOffer(chat: string, m: AppMessage) {
   };
   await addMessage(msg);
   void sessions.get(chat)?.send({ t: 'receipt', s: 'delivered', ids: [m.id] }).catch(() => {});
-  await afterIncoming(chat, 'New file');
+  await afterIncoming(chat, 'file');
   if (size <= S().settings.autoAcceptMB * 1024 * 1024) await acceptFile(msg);
 }
 
@@ -754,6 +757,7 @@ async function onReady(p: Pending, peer: Uint8Array): Promise<string> {
   void p.session!.send({ t: 'profile', name: S().profile.name }).catch(() => {});
   if (!existing) await addSystemNote(id, 'Connected. Compare safety numbers to verify this contact.');
   toast(`Securely connected to ${displayName(c)}`, 'success');
+  void notify({ chat: id, kind: 'connected', name: displayName(c) });
   await openChat(id);
   return id;
 }

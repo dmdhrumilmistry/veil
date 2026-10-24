@@ -18,7 +18,7 @@ Please report security problems privately through **GitHub Security Advisories**
 | **Tampering, replay, reordering** | AEAD with strict sequence numbers. Any failure tears down the session. Files are SHA-256 verified end to end. |
 | **Device theft while locked** | All data is encrypted at rest. The passphrase is stretched with PBKDF2-SHA-256 (600,000 iterations). Lookup keys are HMAC tags, so even contact identifiers are not visible. |
 | **XSS / script injection** | Strict CSP (`default-src 'none'`, `script-src 'self'`), Trusted Types enforced, no `innerHTML`, no inline scripts or styles, no third-party code. Only inert media types render inline. Everything else downloads as `application/octet-stream`. |
-| **Notification leaks** | OS notifications never include message content or names. |
+| **Notification leaks** | OS notifications never include message content. Sender names are opt-in. Notification payloads carry a random in-memory token, never a contact id. |
 
 ### What Veil does not protect against
 

@@ -56,6 +56,8 @@ export interface Settings {
   autoAcceptMB: number;
   enterToSend: boolean;
   notifications: boolean;
+  /** Show contact names in notifications (visible on lock screens). */
+  notifyNames: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -69,6 +71,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoAcceptMB: 25,
   enterToSend: true,
   notifications: false,
+  notifyNames: false,
 };
 
 export interface Profile {
