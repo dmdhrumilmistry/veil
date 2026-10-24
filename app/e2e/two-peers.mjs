@@ -123,7 +123,11 @@ try {
   await bob.getByRole('button', { name: 'Back' }).click();
   await bob.getByRole('button', { name: /Alice/ }).first().click();
   await bob.getByText('secret notification test').waitFor();
-  const left = await bob.evaluate(async () => ((await (await navigator.serviceWorker.getRegistration())?.getNotifications()) ?? []).length);
+  let left = -1;
+  for (let i = 0; i < 25 && left !== 0; i++) {
+    left = await bob.evaluate(async () => ((await (await navigator.serviceWorker.getRegistration())?.getNotifications()) ?? []).length);
+    if (left) await bob.waitForTimeout(200);
+  }
   if (left !== 0) fail('notification not cleared after opening chat');
   console.log('notifications ok (no content, unread badge, cleared on open)');
 

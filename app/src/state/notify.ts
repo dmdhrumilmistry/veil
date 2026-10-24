@@ -20,6 +20,7 @@ import { store } from './store';
 export type NotifyPermission = 'granted' | 'default' | 'denied' | 'unsupported' | 'needs-install';
 
 const TAG_PREFIX = 'veil-';
+const isVisible = () => document.visibilityState === 'visible';
 const tokens = new Map<string, string>(); // token -> chat
 const tokenByChat = new Map<string, string>();
 const pendingCount = new Map<string, number>(); // chat -> messages since last viewed
@@ -72,7 +73,7 @@ function text(n: NotifyInput, count: number, showNames: boolean): { title: strin
 /** Raise a notification if Veil is not in front and the user enabled them. */
 export async function notify(n: NotifyInput): Promise<void> {
   const { settings } = store.state;
-  if (!settings.notifications || document.visibilityState === 'visible') return;
+  if (!settings.notifications || isVisible()) return;
   if (notifyPermission() !== 'granted') return;
 
   let count = 1;
@@ -95,6 +96,8 @@ export async function notify(n: NotifyInput): Promise<void> {
 
   try {
     const reg = await registration();
+    // The user may have opened Veil while we waited for the service worker.
+    if (isVisible() || (n.chat && !pendingCount.has(n.chat) && n.kind !== 'connected')) return;
     if (reg) return await reg.showNotification(title, options);
     const notif = new Notification(title, options);
     notif.onclick = () => {
