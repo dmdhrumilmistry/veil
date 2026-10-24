@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; require-trusted-types-for 'script'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Veil - Private, peer-to-peer, post-quantum encrypted chat</title>
+  <meta name="description" content="Veil is a private chat and file sharing app that connects your devices directly over WebRTC. Post-quantum end-to-end encryption, no accounts, no servers storing your messages, open source.">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0B0B14" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F6F6FB" media="(prefers-color-scheme: light)">
+  <link rel="canonical" href="https://dmdhrumilmistry.github.io/veil/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Veil">
+  <meta property="og:title" content="Veil - Private conversations, with nothing in between">
+  <meta property="og:description" content="Peer-to-peer chat and file sharing with post-quantum end-to-end encryption. No accounts, no servers storing your messages, open source.">
+  <meta property="og:url" content="https://dmdhrumilmistry.github.io/veil/">
+  <meta property="og:image" content="https://dmdhrumilmistry.github.io/veil/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Veil logo with the tagline: Private conversations, with nothing in between.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Veil - Private conversations, with nothing in between">
+  <meta name="twitter:description" content="Peer-to-peer chat and file sharing with post-quantum end-to-end encryption. No accounts. No servers. Open source.">
+  <meta name="twitter:image" content="https://dmdhrumilmistry.github.io/veil/og.png">
+
+  <script src="main.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <div class="backdrop" aria-hidden="true">
+    <span class="orb orb-1"></span>
+    <span class="orb orb-2"></span>
+    <span class="orb orb-3"></span>
+    <span class="grid-fade"></span>
+  </div>
+
+  <header class="site-header" id="top">
+    <nav class="nav container" aria-label="Primary">
+      <a class="brand" href="#top" aria-label="Veil home">
+        <img src="favicon.svg" alt="" width="32" height="32">
+        <span>Veil</span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#security">Security</a></li>
+        <li><a href="#compare">Compare</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ul>
+      <div class="nav-actions">
+        <a class="icon-link" href="https://github.com/dmdhrumilmistry/veil" aria-label="Veil source code on GitHub">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.08.63-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.56 9.56 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85v2.75c0 .27.18.58.69.48A10 10 0 0 0 12 2z"/></svg>
+        </a>
+        <a class="btn btn-primary btn-sm" href="app/">Open Veil</a>
+        <details class="nav-menu">
+          <summary aria-label="Menu">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </summary>
+          <ul class="nav-menu-list">
+            <li><a href="#features">Features</a></li>
+            <li><a href="#how">How it works</a></li>
+            <li><a href="#security">Security</a></li>
+            <li><a href="#compare">Compare</a></li>
+            <li><a href="#install">Install</a></li>
+            <li><a href="#faq">FAQ</a></li>
+            <li><a href="https://github.com/dmdhrumilmistry/veil">Source code</a></li>
+          </ul>
+        </details>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <!-- Hero -->
+    <section class="hero container" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="dot" aria-hidden="true"></span> Peer-to-peer - post-quantum - open source</p>
+        <h1 id="hero-title">Private conversations, <span class="gradient-text">with nothing in between.</span></h1>
+        <p class="lead">Veil connects your device directly to theirs. Messages and files are end-to-end encrypted with a hybrid post-quantum handshake and never touch a server. No accounts, no phone number, no email.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary btn-lg" href="app/">
+            Open Veil
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <a class="btn btn-ghost btn-lg" href="#how">How it works</a>
+          <a class="btn btn-link btn-lg" href="https://github.com/dmdhrumilmistry/veil">View source</a>
+        </div>
+        <p class="hero-note">Runs in your browser and installs like an app on desktop, Android, iOS and tablets.</p>
+      </div>
+
+      <div class="hero-visual" aria-hidden="true">
+        <div class="device-stage">
+          <!-- Desktop window -->
+          <div class="window">
+            <div class="window-bar">
+              <span class="light light-r"></span><span class="light light-y"></span><span class="light light-g"></span>
+              <span class="window-title">Veil</span>
+            </div>
+            <div class="window-body">
+              <aside class="w-sidebar">
+                <div class="w-contact is-active"><span class="avatar av-a">M</span><span class="w-name">Maya</span><span class="w-dot"></span></div>
+                <div class="w-contact"><span class="avatar av-b">J</span><span class="w-name">Jonas</span></div>
+                <div class="w-contact"><span class="avatar av-c">P</span><span class="w-name">Priya</span></div>
+                <div class="w-new">+ New invite</div>
+              </aside>
+              <div class="w-main">
+                <div class="w-card">
+                  <div class="w-card-head"><span class="ok-badge">Connected</span><span class="w-muted">Direct - WebRTC</span></div>
+                  <ul class="w-rows">
+                    <li><span>Key exchange</span><b>X25519 + ML-KEM-768</b></li>
+                    <li><span>Identity</span><b>Ed25519 verified</b></li>
+                    <li><span>Messages</span><b>AES-256-GCM ratchet</b></li>
+                    <li><span>Transport</span><b>DTLS</b></li>
+                  </ul>
+                </div>
+                <div class="w-card">
+                  <div class="w-card-head"><span>Safety number</span><span class="verified">Verified</span></div>
+                  <div class="safety">
+                    <span>37281</span><span>90455</span><span>12093</span><span>66710</span>
+                    <span>84192</span><span>30587</span><span>51274</span><span>09936</span>
+                    <span>47805</span><span>28163</span><span>73019</span><span>65542</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Phone -->
+          <div class="phone">
+            <div class="phone-notch"></div>
+            <div class="phone-screen">
+              <div class="chat-head">
+                <span class="avatar av-a">M</span>
+                <div>
+                  <div class="chat-name">Maya</div>
+                  <div class="chat-status"><svg viewBox="0 0 24 24" width="11" height="11"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" fill="currentColor"/></svg> Verified - end-to-end encrypted</div>
+                </div>
+              </div>
+              <div class="chat-body">
+                <div class="sys-chip">Post-quantum session established</div>
+                <div class="bubble in">Scanned your QR - we're connected.</div>
+                <div class="bubble out">Safety numbers match on my side too.</div>
+                <div class="bubble in">Sending the trip photos</div>
+                <div class="file-card">
+                  <div class="file-icon"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z M14 3v6h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
+                  <div class="file-meta">
+                    <div class="file-name">trip-photos.zip</div>
+                    <div class="file-sub">1.2 GB - encrypted chunks</div>
+                    <div class="progress"><span class="progress-bar"></span></div>
+                  </div>
+                </div>
+                <div class="typing"><span></span><span></span><span></span></div>
+              </div>
+              <div class="chat-input"><span>Message</span><span class="send"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Trust strip -->
+    <section class="trust container" aria-label="Highlights">
+      <ul class="trust-list">
+        <li class="reveal">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="19" cy="12" r="3"/><path d="M8 12h8"/></svg>
+          <span><b>No servers</b> Device-to-device</span>
+        </li>
+        <li class="reveal">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/><path d="M3 3l18 18"/></svg>
+          <span><b>No accounts</b> No phone or email</span>
+        </li>
+        <li class="reveal">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="10" ry="4"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(120 12 12)"/></svg>
+          <span><b>Post-quantum</b> X25519 + ML-KEM-768</span>
+        </li>
+        <li class="reveal">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6"/></svg>
+          <span><b>Open source</b> Read every line</span>
+        </li>
+      </ul>
+    </section>
+
+    <!-- Features -->
+    <section class="section container" id="features" aria-labelledby="features-title">
+      <header class="section-head reveal">
+        <p class="kicker">Features</p>
+        <h2 id="features-title">Everything you need. Nobody in the middle.</h2>
+        <p class="section-lead">Veil is built around one idea: the only devices that should ever see your conversation are yours and theirs.</p>
+      </header>
+      <div class="feature-grid">
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="19" cy="12" r="3"/><path d="M8 12h8"/></svg></div>
+          <h3>Truly peer-to-peer</h3>
+          <p>Messages travel over WebRTC data channels directly between devices. No server stores or relays them.</p>
+        </article>
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="10" ry="4"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(120 12 12)"/></svg></div>
+          <h3>Post-quantum handshake</h3>
+          <p>Hybrid X25519 + ML-KEM-768 (FIPS 203) key exchange, so recorded traffic stays protected against future quantum attacks.</p>
+        </article>
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></div>
+          <h3>Forward secrecy</h3>
+          <p>Fresh ephemeral keys every session and a per-message key chain. Each message key is deleted after use.</p>
+        </article>
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+          <h3>Verified contacts</h3>
+          <p>Compare a 60-digit safety number or scan a QR code. Veil warns you if a contact's identity key ever changes.</p>
+        </article>
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12.5 11l-2 4h3.5l-2 4"/></svg></div>
+          <h3>Fast file sharing</h3>
+          <p>Send files of any size in 64 KiB encrypted chunks on a dedicated channel, each file SHA-256 verified on arrival.</p>
+        </article>
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div>
+          <h3>Encrypted at rest</h3>
+          <p>Everything stays on your device in IndexedDB, encrypted with AES-256-GCM under a key protected by your passphrase.</p>
+        </article>
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg></div>
+          <h3>Lock, expire, wipe</h3>
+          <p>Auto-lock when you step away, disappearing messages, and a one-tap wipe that removes everything from the device.</p>
+        </article>
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M12 12l3 1.2v2c0 1.6-1.3 2.6-3 3-1.7-.4-3-1.4-3-3v-2z"/></svg></div>
+          <h3>Hardened by default</h3>
+          <p>Strict Content-Security-Policy and Trusted Types. No third-party scripts, no analytics, no trackers, no cookies.</p>
+        </article>
+        <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="14" height="10" rx="1.5"/><path d="M6 18h6M9 14v4"/><rect x="16" y="9" width="6" height="11" rx="1.5"/></svg></div>
+          <h3>Installable everywhere</h3>
+          <p>A progressive web app for desktop, Android, iOS and tablets. Install it from your browser in a couple of taps.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="section container" id="how" aria-labelledby="how-title">
+      <header class="section-head reveal">
+        <p class="kicker">How it works</p>
+        <h2 id="how-title">Connected in three steps</h2>
+        <p class="section-lead">There is no server to introduce you, so you introduce yourselves. Share codes over any channel you like - in person, or through another messenger.</p>
+      </header>
+      <ol class="steps">
+        <li class="card step reveal">
+          <span class="step-num" aria-hidden="true">1</span>
+          <h3>Create an invite</h3>
+          <p>Veil generates an invite link and QR code that carries your identity key. Show the QR in person or send the link however you like.</p>
+          <div class="step-art" aria-hidden="true">
+            <div class="qr">
+              <span></span><span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+        </li>
+        <li class="card step reveal">
+          <span class="step-num" aria-hidden="true">2</span>
+          <h3>They open it and reply</h3>
+          <p>Your contact opens the link in Veil, which produces a reply code. They send that code back to you through the same or any other channel.</p>
+          <div class="step-art" aria-hidden="true">
+            <div class="code-pill">veil-reply: 7Hq2-xP9k-Lm4V...</div>
+          </div>
+        </li>
+        <li class="card step reveal">
+          <span class="step-num" aria-hidden="true">3</span>
+          <h3>Connected - now verify</h3>
+          <p>Paste the reply and your devices connect directly. Compare safety numbers to confirm nobody is in between, then start chatting.</p>
+          <div class="step-art" aria-hidden="true">
+            <div class="match"><span class="ok-badge">Safety numbers match</span></div>
+          </div>
+        </li>
+      </ol>
+      <p class="callout reveal">Each new session needs a fresh invite exchange. That is the honest trade-off of having no server to rendezvous through.</p>
+    </section>
+
+    <!-- Security -->
+    <section class="section container" id="security" aria-labelledby="security-title">
+      <header class="section-head reveal">
+        <p class="kicker">Security deep-dive</p>
+        <h2 id="security-title">Two layers of encryption, zero trust in the network</h2>
+        <p class="section-lead">Veil runs its own authenticated, post-quantum end-to-end encryption inside WebRTC's mandatory DTLS encryption. Even if one layer failed, the other still stands.</p>
+      </header>
+
+      <div class="security-grid">
+        <figure class="diagram card reveal">
+          <div class="diagram-scroll" tabindex="0" role="region" aria-label="Protocol diagram, scrolls horizontally on small screens">
+          <svg viewBox="12 18 616 362" role="img" aria-labelledby="diag-title diag-desc">
+            <title id="diag-title">Veil protocol layers</title>
+            <desc id="diag-desc">Two devices connected directly. The outer layer is WebRTC DTLS. Inside it, every message and file chunk is encrypted with AES-256-GCM using per-message keys from a KDF chain, seeded by a hybrid X25519 plus ML-KEM-768 handshake authenticated with Ed25519 signatures.</desc>
+            <defs>
+              <linearGradient id="dg-brand" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#7C5CFF"/>
+                <stop offset="1" stop-color="#22D3EE"/>
+              </linearGradient>
+              <linearGradient id="dg-fade" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#7C5CFF" stop-opacity=".25"/>
+                <stop offset="1" stop-color="#22D3EE" stop-opacity=".25"/>
+              </linearGradient>
+            </defs>
+
+            <!-- devices -->
+            <g class="d-device">
+              <rect x="18" y="130" width="96" height="150" rx="16"/>
+              <rect class="d-screen" x="28" y="146" width="76" height="110" rx="8"/>
+            </g>
+            <g class="d-device">
+              <rect x="526" y="130" width="96" height="150" rx="16"/>
+              <rect class="d-screen" x="536" y="146" width="76" height="110" rx="8"/>
+            </g>
+            <text class="d-label" x="66" y="306" text-anchor="middle">You</text>
+            <text class="d-label" x="574" y="306" text-anchor="middle">Contact</text>
+            <path d="M58 190h16M58 200h24M58 210h12" class="d-lines"/>
+            <path d="M566 190h16M566 200h24M566 210h12" class="d-lines"/>
+
+            <!-- outer tube: DTLS -->
+            <rect class="d-outer" x="124" y="150" width="392" height="110" rx="55"/>
+            <!-- inner tube: Veil E2EE -->
+            <rect class="d-inner" x="144" y="172" width="352" height="66" rx="33" fill="url(#dg-fade)" stroke="url(#dg-brand)"/>
+            <!-- packets -->
+            <g class="d-packets">
+              <rect class="d-packet p1" x="170" y="192" width="54" height="26" rx="8" fill="url(#dg-brand)"/>
+              <rect class="d-packet p2" x="292" y="192" width="54" height="26" rx="8" fill="url(#dg-brand)"/>
+              <rect class="d-packet p3" x="414" y="192" width="54" height="26" rx="8" fill="url(#dg-brand)"/>
+            </g>
+            <text class="d-tiny" x="197" y="209" text-anchor="middle">msg</text>
+            <text class="d-tiny" x="319" y="209" text-anchor="middle">file</text>
+            <text class="d-tiny" x="441" y="209" text-anchor="middle">msg</text>
+
+            <!-- labels -->
+            <text class="d-cap" x="320" y="140" text-anchor="middle">Layer 1 - WebRTC DTLS (mandatory)</text>
+            <text class="d-cap d-cap-brand" x="320" y="282" text-anchor="middle">Layer 2 - Veil E2EE: AES-256-GCM, per-message keys</text>
+
+            <!-- handshake strip -->
+            <g class="d-steps">
+              <rect x="40" y="24" width="168" height="72" rx="14"/>
+              <rect x="236" y="24" width="168" height="72" rx="14"/>
+              <rect x="432" y="24" width="168" height="72" rx="14"/>
+            </g>
+            <text class="d-step-t" x="124" y="54" text-anchor="middle">Hybrid KEX</text>
+            <text class="d-step-s" x="124" y="76" text-anchor="middle">X25519 + ML-KEM-768</text>
+            <text class="d-step-t" x="320" y="54" text-anchor="middle">Authenticate</text>
+            <text class="d-step-s" x="320" y="76" text-anchor="middle">Ed25519 over transcript</text>
+            <text class="d-step-t" x="516" y="54" text-anchor="middle">Derive keys</text>
+            <text class="d-step-s" x="516" y="76" text-anchor="middle">HKDF-SHA-256</text>
+            <path class="d-arrow" d="M210 60h22M406 60h22"/>
+            <path class="d-arrow-head" d="M226 55l6 5-6 5M422 55l6 5-6 5"/>
+            <path class="d-link" d="M516 98v52"/>
+            <path class="d-link" d="M124 98v52"/>
+
+            <!-- bottom: network -->
+            <rect class="d-net" x="124" y="318" width="392" height="56" rx="14"/>
+            <text class="d-step-t" x="320" y="342" text-anchor="middle">Network</text>
+            <text class="d-step-s" x="320" y="362" text-anchor="middle">STUN finds addresses - optional TURN only relays ciphertext</text>
+          </svg>
+          </div>
+          <figcaption>Session keys from the hybrid handshake seed a per-message KDF chain. Every message and file chunk gets its own AES-256-GCM key, which is deleted after use.</figcaption>
+        </figure>
+
+        <div class="security-list">
+          <article class="sec-item reveal">
+            <h3><span class="sec-tag">Handshake</span> Hybrid post-quantum key exchange</h3>
+            <p>X25519 is combined with ML-KEM-768 (FIPS 203). An attacker would need to break both to recover session keys - including one recording traffic today to decrypt later.</p>
+          </article>
+          <article class="sec-item reveal">
+            <h3><span class="sec-tag">Identity</span> Mutual authentication</h3>
+            <p>Both sides sign the full handshake transcript with their Ed25519 identity keys, bound to the WebRTC DTLS certificate fingerprints so the encrypted channel cannot be swapped out underneath.</p>
+          </article>
+          <article class="sec-item reveal">
+            <h3><span class="sec-tag">Messages</span> Symmetric ratchet</h3>
+            <p>Keys are derived with HKDF-SHA-256 and advanced through a Signal-style KDF chain. Each message and file chunk is sealed with AES-256-GCM under a one-time key that is deleted after use.</p>
+          </article>
+          <article class="sec-item reveal">
+            <h3><span class="sec-tag">Storage</span> Encrypted at rest</h3>
+            <p>Local data in IndexedDB is encrypted with AES-256-GCM under a random data key, wrapped by a key derived from your passphrase with PBKDF2-SHA-256 at 600,000 iterations.</p>
+          </article>
+          <article class="sec-item reveal">
+            <h3><span class="sec-tag">Browser</span> Locked-down runtime</h3>
+            <p>A strict Content-Security-Policy and Trusted Types block injected scripts. No third-party code is loaded - ever.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Comparison -->
+    <section class="section container" id="compare" aria-labelledby="compare-title">
+      <header class="section-head reveal">
+        <p class="kicker">Compare</p>
+        <h2 id="compare-title">Veil vs. a typical cloud messenger</h2>
+        <p class="section-lead">Different designs make different trade-offs. Here is an honest look at both.</p>
+      </header>
+      <div class="table-wrap card reveal" role="region" aria-labelledby="compare-title" tabindex="0">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col"><span class="visually-hidden">Aspect</span></th>
+              <th scope="col" class="col-veil">Veil</th>
+              <th scope="col">Typical cloud messenger</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Where messages live</th>
+              <td class="col-veil"><span class="yes">On your devices only, encrypted at rest</span></td>
+              <td>On your devices, usually passing through or queued on provider servers</td>
+            </tr>
+            <tr>
+              <th scope="row">Account needed</th>
+              <td class="col-veil"><span class="yes">None - no phone number or email</span></td>
+              <td>Usually a phone number or email</td>
+            </tr>
+            <tr>
+              <th scope="row">Message delivery path</th>
+              <td class="col-veil"><span class="yes">Direct device-to-device over WebRTC</span></td>
+              <td>Relayed through the provider's servers</td>
+            </tr>
+            <tr>
+              <th scope="row">Server can observe who talks to whom</th>
+              <td class="col-veil"><span class="yes">No messaging server exists*</span></td>
+              <td>The provider is in a position to see it</td>
+            </tr>
+            <tr>
+              <th scope="row">Post-quantum key exchange</th>
+              <td class="col-veil"><span class="yes">Yes - X25519 + ML-KEM-768</span></td>
+              <td>Varies by app</td>
+            </tr>
+            <tr>
+              <th scope="row">Source code</th>
+              <td class="col-veil"><span class="yes">Open source</span></td>
+              <td>Varies by app</td>
+            </tr>
+            <tr>
+              <th scope="row">Messages to offline contacts</th>
+              <td class="col-veil"><span class="no">Not possible - both devices must be online</span></td>
+              <td>Delivered later via the server</td>
+            </tr>
+            <tr>
+              <th scope="row">Reconnecting</th>
+              <td class="col-veil"><span class="no">New invite exchange each session</span></td>
+              <td>Automatic</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="footnote reveal">* Public STUN servers help each device discover its network address and can see that address, but never message content. You can disable STUN and configure your own TURN relay, which only ever carries ciphertext.</p>
+    </section>
+
+    <!-- Install -->
+    <section class="section container" id="install" aria-labelledby="install-title">
+      <header class="section-head reveal">
+        <p class="kicker">Works everywhere</p>
+        <h2 id="install-title">Install it like an app</h2>
+        <p class="section-lead">Veil is a progressive web app. Open it once, add it to your device, and launch it from your home screen or dock.</p>
+      </header>
+      <div class="install-grid">
+        <article class="card install reveal">
+          <div class="install-head">
+            <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10.5 18.5h3"/></svg></div>
+            <h3>iPhone and iPad</h3>
+          </div>
+          <ol>
+            <li>Open Veil in <b>Safari</b>.</li>
+            <li>Tap the <b>Share</b> button.</li>
+            <li>Choose <b>Add to Home Screen</b>.</li>
+          </ol>
+        </article>
+        <article class="card install reveal">
+          <div class="install-head">
+            <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M12 7v7M9 11l3 3 3-3"/></svg></div>
+            <h3>Android</h3>
+          </div>
+          <ol>
+            <li>Open Veil in <b>Chrome</b>.</li>
+            <li>Tap the <b>menu</b> (three dots).</li>
+            <li>Choose <b>Install app</b>.</li>
+          </ol>
+        </article>
+        <article class="card install reveal">
+          <div class="install-head">
+            <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+            <h3>Desktop</h3>
+          </div>
+          <ol>
+            <li>Open Veil in <b>Chrome</b> or <b>Edge</b>.</li>
+            <li>Click the <b>install icon</b> in the address bar.</li>
+            <li>Confirm with <b>Install</b>.</li>
+          </ol>
+        </article>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="section container narrow" id="faq" aria-labelledby="faq-title">
+      <header class="section-head reveal">
+        <p class="kicker">FAQ</p>
+        <h2 id="faq-title">Questions, answered honestly</h2>
+      </header>
+      <div class="faq">
+        <details class="reveal">
+          <summary>Do I need an account?</summary>
+          <p>No. There is no sign-up, no phone number and no email. Your identity is a key pair generated on your device.</p>
+        </details>
+        <details class="reveal">
+          <summary>Why do I have to exchange a new invite every session?</summary>
+          <p>Because there is no server to rendezvous through. Cloud messengers can reconnect you automatically because their servers know where you are. Veil deliberately has no such server, so each new session starts with a fresh invite and reply exchange over a channel you choose. It is a small amount of friction in exchange for not having a middleman.</p>
+        </details>
+        <details class="reveal">
+          <summary>Does Veil use any servers at all?</summary>
+          <p>Only to help devices find each other on the network. Public STUN servers tell your device its public address - they never see message content. You can disable STUN in settings and configure your own TURN relay instead. A TURN relay forwards traffic but only ever sees ciphertext. Nothing stores or relays your messages by default.</p>
+        </details>
+        <details class="reveal">
+          <summary>Why won't it connect on some networks?</summary>
+          <p>Some strict networks, such as those using symmetric NAT, block direct peer-to-peer connections. In that case you will need to configure a TURN relay in settings so traffic can be forwarded. Your messages remain end-to-end encrypted through it.</p>
+        </details>
+        <details class="reveal">
+          <summary>What does "post-quantum" mean here?</summary>
+          <p>The handshake combines classic X25519 with ML-KEM-768, the post-quantum key encapsulation mechanism standardized in FIPS 203. Session keys stay safe as long as either one holds, which protects against someone recording traffic today and decrypting it with a future quantum computer.</p>
+        </details>
+        <details class="reveal">
+          <summary>How do I know I am talking to the right person?</summary>
+          <p>Compare your 60-digit safety number, or scan each other's QR code in person. Invite links also carry the sender's identity key, so scanning an invite face to face authenticates them. If a contact's identity key ever changes, Veil warns you.</p>
+        </details>
+        <details class="reveal">
+          <summary>Can I send large files?</summary>
+          <p>Yes, files of any size. They are streamed in 64 KiB encrypted chunks over a dedicated data channel with backpressure, so chat never blocks behind a transfer, and every file is verified with SHA-256 when it arrives.</p>
+        </details>
+        <details class="reveal">
+          <summary>What happens if I forget my passphrase?</summary>
+          <p>Your local data is encrypted under a key that only your passphrase can unlock, and there is no account or server that could reset it. Choose a passphrase you will remember.</p>
+        </details>
+        <details class="reveal">
+          <summary>Does Veil track me?</summary>
+          <p>No. There are no analytics, no trackers, no cookies and no third-party scripts - in the app or on this site. The source code is open for anyone to check.</p>
+        </details>
+      </div>
+    </section>
+
+    <!-- Final CTA -->
+    <section class="container" aria-labelledby="cta-title">
+      <div class="final-cta reveal">
+        <img class="final-logo" src="favicon.svg" alt="" width="64" height="64">
+        <h2 id="cta-title">Start a private conversation</h2>
+        <p>No sign-up. No servers. Just you, them, and strong encryption.</p>
+        <div class="cta-row cta-center">
+          <a class="btn btn-primary btn-lg" href="app/">Open Veil</a>
+          <a class="btn btn-ghost btn-lg" href="https://github.com/dmdhrumilmistry/veil">View source</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <a class="brand" href="#top" aria-label="Veil, back to top">
+          <img src="favicon.svg" alt="" width="28" height="28">
+          <span>Veil</span>
+        </a>
+        <p>Private, peer-to-peer, end-to-end encrypted chat and file sharing.</p>
+      </div>
+      <nav aria-label="Footer">
+        <ul class="footer-links">
+          <li><a href="app/">Open app</a></li>
+          <li><a href="#security">Security</a></li>
+          <li><a href="#faq">FAQ</a></li>
+          <li><a href="https://github.com/dmdhrumilmistry/veil">Source code</a></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="container footer-base">
+      <p>No cookies. No analytics. No trackers.</p>
+      <p>Open source on <a href="https://github.com/dmdhrumilmistry/veil">GitHub</a></p>
+    </div>
+  </footer>
+</body>
+</html>

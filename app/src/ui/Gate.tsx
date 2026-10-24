@@ -1,0 +1,194 @@
+import { useState } from 'preact/hooks';
+import { createAccount, unlock, wipeEverything } from '../state/app';
+import { useApp } from '../state/store';
+import { WrongPassphraseError } from '../storage/vault';
+import { Icon, Logo } from './icons';
+
+/** Rough strength estimate: charset entropy x length, with penalties for repetition. */
+export function strength(p: string): { score: 0 | 1 | 2 | 3 | 4; label: string } {
+  if (!p) return { score: 0, label: '' };
+  let pool = 0;
+  if (/[a-z]/.test(p)) pool += 26;
+  if (/[A-Z]/.test(p)) pool += 26;
+  if (/\d/.test(p)) pool += 10;
+  if (/[^A-Za-z0-9]/.test(p)) pool += 33;
+  const unique = new Set(p).size;
+  const bits = Math.log2(Math.max(pool, 2)) * Math.min(p.length, unique * 2.5);
+  if (bits < 40) return { score: 1, label: 'Weak' };
+  if (bits < 60) return { score: 2, label: 'Fair' };
+  if (bits < 80) return { score: 3, label: 'Strong' };
+  return { score: 4, label: 'Excellent' };
+}
+
+export const MIN_PASSPHRASE = 10;
+
+export function Onboarding() {
+  const [step, setStep] = useState(0);
+  const [name, setName] = useState('');
+  const [pass, setPass] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const st = strength(pass);
+  const valid = pass.length >= MIN_PASSPHRASE && st.score >= 2 && pass === confirm;
+
+  const submit = async (e: Event) => {
+    e.preventDefault();
+    if (!valid || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await createAccount(name, pass);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  if (step === 0) {
+    return (
+      <main class="gate">
+        <div class="gate-card gate-hero">
+          <Logo size={72} />
+          <h1>Welcome to Veil</h1>
+          <p class="lead">Private conversations that go straight from your device to theirs. No servers, no accounts, no phone numbers.</p>
+          <ul class="pill-list">
+            <li><Icon name="shieldCheck" size={18} /> Post-quantum end-to-end encryption</li>
+            <li><Icon name="plug" size={18} /> Direct peer-to-peer over WebRTC</li>
+            <li><Icon name="lock" size={18} /> Everything stays encrypted on this device</li>
+          </ul>
+          <button class="btn primary lg" onClick={() => setStep(1)}>Get started</button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main class="gate">
+      <form class="gate-card" onSubmit={submit}>
+        <button type="button" class="icon-btn gate-back" aria-label="Back" onClick={() => setStep(0)}>
+          <Icon name="back" />
+        </button>
+        <h1>Set up this device</h1>
+        <p class="muted">Your identity is created locally. Nothing is uploaded anywhere.</p>
+
+        <div class="field">
+          <label for="ob-name">Display name</label>
+          <input id="ob-name" aria-describedby="ob-name-hint" value={name} maxLength={48} autoComplete="nickname" placeholder="How contacts will see you" onInput={(e) => setName(e.currentTarget.value)} />
+          <small id="ob-name-hint">Shared only with people you connect to.</small>
+        </div>
+
+        <div class="field">
+          <label for="ob-pass">Passphrase</label>
+          <div class="input-row">
+            <input id="ob-pass" aria-describedby="ob-pass-hint" type={show ? 'text' : 'password'} value={pass} autoComplete="new-password" required minLength={MIN_PASSPHRASE} onInput={(e) => setPass(e.currentTarget.value)} />
+            <button type="button" class="link-btn" aria-pressed={show} onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
+          </div>
+          <div class={`meter s${st.score}`} aria-hidden="true"><i /><i /><i /><i /></div>
+          <small id="ob-pass-hint" aria-live="polite">{pass ? `${st.label}${pass.length < MIN_PASSPHRASE ? ` - at least ${MIN_PASSPHRASE} characters` : ''}` : 'Encrypts all data on this device. Try 4+ random words.'}</small>
+        </div>
+
+        <div class="field">
+          <label for="ob-confirm">Confirm passphrase</label>
+          <input id="ob-confirm" type={show ? 'text' : 'password'} value={confirm} autoComplete="new-password" required onInput={(e) => setConfirm(e.currentTarget.value)} />
+          {confirm && confirm !== pass && <small class="err">Passphrases do not match</small>}
+        </div>
+
+        <div class="callout warn">
+          <Icon name="alert" size={18} />
+          <span>There is no recovery. If you forget this passphrase, your chats cannot be decrypted by anyone - including us.</span>
+        </div>
+
+        {error && <p class="err" role="alert">{error}</p>}
+        <button class="btn primary lg" disabled={!valid || busy}>
+          {busy ? <span class="spinner" aria-hidden="true" /> : <Icon name="lock" size={18} />}
+          {busy ? 'Creating keys...' : 'Create encrypted vault'}
+        </button>
+      </form>
+    </main>
+  );
+}
+
+export function LockScreen() {
+  const [pass, setPass] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [confirmWipe, setConfirmWipe] = useState(false);
+
+  const submit = async (e: Event) => {
+    e.preventDefault();
+    if (!pass || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await unlock(pass);
+    } catch (err) {
+      setError(err instanceof WrongPassphraseError ? 'Incorrect passphrase' : (err as Error).message);
+      setBusy(false);
+      // Small delay discourages rapid guessing from the UI (PBKDF2 already makes each guess costly).
+      await new Promise((r) => setTimeout(r, 600));
+    }
+  };
+
+  return (
+    <main class="gate">
+      <form class="gate-card narrow" onSubmit={submit}>
+        <div class="lock-badge">
+          <Logo size={56} />
+        </div>
+        <h1>Veil is locked</h1>
+        <p class="muted">Enter your passphrase to decrypt your conversations.</p>
+        <label class="field">
+          <span class="sr-only">Passphrase</span>
+          <input type="password" value={pass} autoFocus autoComplete="current-password" placeholder="Passphrase" onInput={(e) => setPass(e.currentTarget.value)} aria-invalid={!!error} />
+        </label>
+        {error && <p class="err" role="alert">{error}</p>}
+        <button class="btn primary lg" disabled={!pass || busy}>
+          {busy ? <span class="spinner" aria-hidden="true" /> : <Icon name="lock" size={18} />}
+          {busy ? 'Unlocking...' : 'Unlock'}
+        </button>
+        <div class="gate-foot">
+          {confirmWipe ? (
+            <div class="callout danger">
+              <span>Erase all chats, files and keys on this device? This cannot be undone.</span>
+              <div class="row">
+                <button type="button" class="btn ghost sm" onClick={() => setConfirmWipe(false)}>Cancel</button>
+                <button type="button" class="btn danger sm" onClick={() => void wipeEverything()}>Erase everything</button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" class="link-btn muted" onClick={() => setConfirmWipe(true)}>Forgot passphrase? Reset this device</button>
+          )}
+        </div>
+      </form>
+    </main>
+  );
+}
+
+export function Unsupported() {
+  return (
+    <main class="gate">
+      <div class="gate-card narrow">
+        <Logo size={56} />
+        <h1>Browser not supported</h1>
+        <p class="muted">
+          Veil needs a modern browser with WebRTC and Ed25519/X25519 WebCrypto support. Please update to the latest Chrome, Edge, Firefox or Safari.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+export function Handoff() {
+  const { handoffMessage } = useApp();
+  return (
+    <main class="gate">
+      <div class="gate-card narrow">
+        <div class="success-ring"><Icon name="check" size={36} /></div>
+        <h1>Reply delivered</h1>
+        <p class="muted">{handoffMessage}</p>
+      </div>
+    </main>
+  );
+}

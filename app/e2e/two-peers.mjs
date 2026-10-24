@@ -1,0 +1,168 @@
+/**
+ * End-to-end test: two isolated browser profiles onboard, connect over a real WebRTC
+ * link using only copy/paste signaling, exchange messages and a file, and verify the
+ * strict CSP produced no violations. Run after `npm run build`.
+ */
+import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { chromium } from 'playwright';
+
+const PORT = 4179;
+const BASE = `http://localhost:${PORT}/`;
+const SHOTS = process.env.SHOTS_DIR;
+const PASS = 'correct horse battery staple';
+
+const server = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'pipe' });
+const fail = (msg) => {
+  console.error('FAIL:', msg);
+  server.kill('SIGKILL');
+  process.exit(1);
+};
+await new Promise((resolve, reject) => {
+  server.stdout.on('data', (d) => String(d).includes(String(PORT)) && resolve());
+  server.on('exit', () => reject(new Error('preview server exited')));
+  setTimeout(() => reject(new Error('preview server timeout')), 20000);
+});
+
+const browser = await chromium.launch({
+  args: ['--disable-features=WebRtcHideLocalIpsWithMdns', '--use-fake-ui-for-media-stream'],
+});
+const problems = [];
+
+async function peer(name, viewport) {
+  const ctx = await browser.newContext({ viewport, permissions: ['clipboard-read', 'clipboard-write'] });
+  const page = await ctx.newPage();
+  page.on('console', (m) => {
+    if (m.type() === 'error' || /Content Security Policy|TrustedHTML|Trusted Type/i.test(m.text())) problems.push(`${name}: ${m.text()}`);
+  });
+  page.on('pageerror', (e) => problems.push(`${name} pageerror: ${e.message}`));
+  await page.goto(BASE);
+  await page.getByRole('button', { name: 'Get started' }).click();
+  await page.getByLabel('Display name').fill(name);
+  await page.getByLabel('Passphrase', { exact: true }).fill(PASS);
+  await page.getByLabel('Confirm passphrase').fill(PASS);
+  await page.getByRole('button', { name: 'Create encrypted vault' }).click();
+  await page.getByRole('button', { name: 'New chat' }).waitFor({ timeout: 20000 });
+  return page;
+}
+
+const clip = (page) => page.evaluate(() => navigator.clipboard.readText());
+const shot = async (page, file) => {
+  if (!SHOTS) return;
+  mkdirSync(SHOTS, { recursive: true });
+  await page.screenshot({ path: `${SHOTS}/${file}` });
+};
+
+try {
+  const alice = await peer('Alice', { width: 1360, height: 860 });
+  const bob = await peer('Bob', { width: 390, height: 844 });
+  await shot(alice, 'desktop-welcome.png');
+
+  // Alice creates an invite.
+  await alice.getByRole('button', { name: 'New chat' }).click();
+  await alice.getByRole('button', { name: 'Copy code' }).click();
+  const offer = await clip(alice);
+  if (!offer.startsWith('VEIL1O.')) fail(`unexpected offer code: ${offer.slice(0, 20)}`);
+  console.log(`offer code: ${offer.length} chars`);
+  await shot(alice, 'desktop-invite.png');
+
+  // Bob pastes it.
+  await bob.getByRole('button', { name: 'Join' }).click();
+  await bob.getByLabel('Invite link or code').fill(offer);
+  await bob.getByRole('button', { name: 'Continue' }).click();
+  await bob.getByRole('button', { name: 'Copy code' }).click();
+  const answer = await clip(bob);
+  if (!answer.startsWith('VEIL1A.')) fail('unexpected answer code');
+  console.log(`answer code: ${answer.length} chars`);
+  await shot(bob, 'mobile-reply.png');
+
+  // Alice completes the connection.
+  await alice.getByLabel('Their reply code').fill(answer);
+  await alice.getByRole('button', { name: 'Connect', exact: true }).click();
+  await alice.getByText('Connected - end-to-end encrypted').waitFor({ timeout: 20000 });
+  await bob.getByText('Connected - end-to-end encrypted').waitFor({ timeout: 20000 });
+  console.log('connected + handshake verified');
+
+  // Messages both ways.
+  await alice.getByLabel('Message', { exact: true }).fill('Hello Bob, this never touches a server');
+  await alice.keyboard.press('Enter');
+  await bob.getByText('Hello Bob, this never touches a server').waitFor();
+  await bob.getByLabel('Message', { exact: true }).fill('Hi Alice! Post-quantum and peer-to-peer');
+  await bob.keyboard.press('Enter');
+  await alice.getByText('Hi Alice! Post-quantum and peer-to-peer').waitFor();
+  await alice.getByLabel('Read').first().waitFor({ timeout: 5000 });
+  console.log('messages + read receipts ok');
+
+  // File transfer (auto-accepted under the 25 MB default).
+  const size = Number(process.env.SIZE_MB || 3) * 1024 * 1024 + 12345;
+  const buf = Buffer.alloc(size);
+  for (let i = 0; i < size; i++) buf[i] = (i * 31 + 7) & 0xff;
+  await alice.locator('input[type=file]').setInputFiles({ name: 'report.bin', mimeType: 'application/octet-stream', buffer: buf });
+  await bob.locator('.file-card.transferring').waitFor({ timeout: 30000 });
+  const t0 = Date.now();
+  await bob.locator('.file-card.done').waitFor({ timeout: 60000 });
+  await alice.locator('.file-card.done').waitFor({ timeout: 30000 });
+  const ms = Date.now() - t0;
+  console.log(`file transfer ok (${(size / 1024 / 1024).toFixed(1)} MB in ${ms} ms = ${(size / 1048576 / (ms / 1000)).toFixed(1)} MB/s, SHA-256 verified)`);
+
+  // Bob saves the file and we compare bytes.
+  const [dl] = await Promise.all([bob.waitForEvent('download'), bob.getByRole('button', { name: 'Save' }).click()]);
+  const path = await dl.path();
+  const { readFileSync } = await import('node:fs');
+  if (!readFileSync(path).equals(buf)) fail('downloaded file differs');
+  console.log('downloaded bytes match');
+
+  await shot(alice, 'desktop-chat.png');
+  await shot(bob, 'mobile-chat.png');
+  await bob.getByRole('button', { name: 'Contact info' }).first().click();
+  await bob.getByText('Safety number').waitFor();
+  const digitsA = await (async () => {
+    await alice.getByRole('button', { name: 'Contact info' }).first().click();
+    return alice.locator('.safety-grid').innerText();
+  })();
+  const digitsB = await bob.locator('.safety-grid').innerText();
+  if (digitsA.replace(/\s/g, '') !== digitsB.replace(/\s/g, '')) fail('safety numbers differ');
+  console.log('safety numbers match');
+  await shot(bob, 'mobile-safety.png');
+
+  // Lock, then unlock and confirm history decrypts from disk.
+  await alice.getByRole('button', { name: 'Back' }).click();
+  await alice.getByRole('button', { name: 'Lock now' }).click();
+  await alice.getByRole('heading', { name: 'Veil is locked' }).waitFor();
+  await shot(alice, 'desktop-lock.png');
+  await alice.getByPlaceholder('Passphrase').fill('wrong passphrase!');
+  await alice.getByRole('button', { name: 'Unlock' }).click();
+  await alice.getByText('Incorrect passphrase').waitFor();
+  await alice.getByPlaceholder('Passphrase').fill(PASS);
+  await alice.getByRole('button', { name: 'Unlock' }).click();
+  await alice.getByRole('button', { name: /Bob/ }).first().click();
+  await alice.getByText('Hello Bob, this never touches a server').waitFor();
+  console.log('lock/unlock + encrypted history ok');
+
+  // Data at rest must not contain plaintext.
+  const leaked = await alice.evaluate(async () => {
+    const db = await new Promise((r) => { const q = indexedDB.open('veil'); q.onsuccess = () => r(q.result); });
+    const all = [];
+    for (const s of db.objectStoreNames) {
+      const vals = await new Promise((r) => { const q = db.transaction(s).objectStore(s).getAll(); q.onsuccess = () => r(q.result); });
+      all.push(...vals);
+    }
+    const dec = new TextDecoder();
+    const text = JSON.stringify(all, (_, v) => (v instanceof Uint8Array ? dec.decode(v) : v));
+    return ['Hello Bob, this never', 'Hi Alice! Post-quantum', 'report.bin'].filter((w) => text.includes(w));
+  });
+  if (leaked.length) fail(`plaintext found in IndexedDB: ${leaked}`);
+  console.log('no plaintext at rest');
+
+  const real = problems.filter((p) => !/favicon|session error/.test(p));
+  if (real.length) fail(`console problems:\n${real.join('\n')}`);
+  console.log('no CSP violations or console errors');
+  console.log("\nE2E PASSED");
+} catch (e) {
+  console.error(problems.join('\n'));
+  fail(e.stack || e.message);
+} finally {
+  server.kill('SIGKILL');
+  await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 3000))]);
+}
+process.exit(0);

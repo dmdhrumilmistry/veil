@@ -1,0 +1,89 @@
+import { useEffect, useState } from 'preact/hooks';
+import type { Contact, Message, Profile, Settings } from '../storage/repo';
+import { DEFAULT_SETTINGS } from '../storage/repo';
+
+export type Phase = 'loading' | 'unsupported' | 'onboarding' | 'locked' | 'ready' | 'handoff';
+
+export type ConnectFlow =
+  | { mode: 'invite'; step: 'creating' | 'waiting' | 'connecting' | 'error'; code?: string; link?: string; error?: string; forContact?: string }
+  | { mode: 'join'; step: 'input' | 'creating' | 'waiting' | 'connecting' | 'error'; code?: string; link?: string; error?: string; peerName?: string };
+
+export interface Toast {
+  id: number;
+  text: string;
+  kind: 'info' | 'error' | 'success';
+}
+
+export type Presence = 'connecting' | 'online';
+
+export interface AppState {
+  phase: Phase;
+  myId: string;
+  profile: Profile;
+  settings: Settings;
+  contacts: Contact[];
+  messages: Record<string, Message[]>;
+  presence: Record<string, Presence>;
+  typing: Record<string, number>;
+  activeChat?: string;
+  connect: ConnectFlow | null;
+  toasts: Toast[];
+  /** Live transfer progress (bytes) keyed by fileId; avoids rewriting messages on every chunk. */
+  progress: Record<string, number>;
+  handoffMessage?: string;
+  view: 'chats' | 'settings' | 'info';
+}
+
+type Listener = () => void;
+
+class Store {
+  state: AppState = {
+    phase: 'loading',
+    myId: '',
+    profile: { name: '' },
+    settings: DEFAULT_SETTINGS,
+    contacts: [],
+    messages: {},
+    presence: {},
+    typing: {},
+    connect: null,
+    toasts: [],
+    progress: {},
+    view: 'chats',
+  };
+  private listeners = new Set<Listener>();
+  private scheduled = false;
+
+  set(patch: Partial<AppState> | ((s: AppState) => Partial<AppState>)) {
+    const p = typeof patch === 'function' ? patch(this.state) : patch;
+    this.state = { ...this.state, ...p };
+    // Batch renders into one animation frame-ish microtask.
+    if (!this.scheduled) {
+      this.scheduled = true;
+      queueMicrotask(() => {
+        this.scheduled = false;
+        for (const l of this.listeners) l();
+      });
+    }
+  }
+
+  subscribe(l: Listener): () => void {
+    this.listeners.add(l);
+    return () => this.listeners.delete(l);
+  }
+}
+
+export const store = new Store();
+
+export function useApp(): AppState {
+  const [, force] = useState(0);
+  useEffect(() => store.subscribe(() => force((n) => n + 1)), []);
+  return store.state;
+}
+
+let toastSeq = 0;
+export function toast(text: string, kind: Toast['kind'] = 'info', ms = 4000) {
+  const id = ++toastSeq;
+  store.set((s) => ({ toasts: [...s.toasts, { id, text, kind }] }));
+  setTimeout(() => store.set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), ms);
+}
