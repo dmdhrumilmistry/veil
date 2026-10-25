@@ -74,14 +74,28 @@ const R = () => {
 
 // ------------------------------------------------------------------ boot / vault
 
+/** Startup must never hang silently: each step has a deadline and a name. */
+function step<T>(name: string, p: Promise<T>, ms = 10_000): Promise<T> {
+  return Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`startup step "${name}" timed out`)), ms))]);
+}
+
 export async function boot() {
+  try {
+    await bootSteps();
+  } catch (err) {
+    console.error('[veil] startup failed:', err);
+    store.set({ phase: 'failed', failure: (err as Error).message });
+  }
+}
+
+async function bootSteps() {
   applyTheme('system');
   const code = takeCodeFromUrl();
-  if (!(await cryptoSupported()) || !window.RTCPeerConnection || !window.indexedDB || !('CompressionStream' in window)) {
+  if (!(await step('crypto', cryptoSupported())) || !window.RTCPeerConnection || !window.indexedDB || !('CompressionStream' in window)) {
     store.set({ phase: 'unsupported' });
     return;
   }
-  if ((code?.startsWith('VEIL1A') || code?.startsWith('VEIL2I')) && (await handOffAnswer(code))) return;
+  if ((code?.startsWith('VEIL1A') || code?.startsWith('VEIL3I')) && (await step('handoff', handOffAnswer(code)))) return;
   if (code) pendingCode = code;
   listenForHandoffs();
   addEventListener('hashchange', () => {
@@ -90,8 +104,8 @@ export async function boot() {
     if (S().phase === 'ready') void openCode(c);
     else pendingCode = c;
   });
-  const exists = await Vault.exists();
-  if (exists && (await heldElsewhere())) return store.set({ phase: 'elsewhere', elsewhere: 'open' });
+  const exists = await step('storage', Vault.exists());
+  if (exists && (await step('window lock', heldElsewhere()))) return store.set({ phase: 'elsewhere', elsewhere: 'open' });
   store.set({ phase: exists ? 'locked' : 'onboarding' });
 }
 
@@ -981,7 +995,7 @@ async function handOffAnswer(code: string): Promise<boolean> {
     bc.postMessage({ type: 'answer', code });
   });
   bc.close();
-  if (acked) store.set({ phase: 'handoff', handoffMessage: code.startsWith('VEIL2I') ? 'Invite opened in your other Veil window. You can close this tab.' : 'Reply delivered to your open Veil tab. You can close this tab.' });
+  if (acked) store.set({ phase: 'handoff', handoffMessage: code.startsWith('VEIL3I') ? 'Invite opened in your other Veil window. You can close this tab.' : 'Reply delivered to your open Veil tab. You can close this tab.' });
   return acked;
 }
 
@@ -991,7 +1005,7 @@ function listenForHandoffs() {
   bc.onmessage = (e) => {
     const data = e.data as { type?: string; code?: unknown };
     // An invite link opened in a new tab: the active, unlocked window takes it.
-    if (data?.type === 'answer' && typeof data.code === 'string' && data.code.startsWith('VEIL2I') && S().phase === 'ready') {
+    if (data?.type === 'answer' && typeof data.code === 'string' && data.code.startsWith('VEIL3I') && S().phase === 'ready') {
       bc.postMessage({ type: 'ack' });
       void openCode(data.code);
       window.focus();

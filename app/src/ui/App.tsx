@@ -8,6 +8,20 @@ import { Icon, Logo } from './icons';
 import { ContactInfo, SettingsPanel } from './Panels';
 import { Sidebar } from './Sidebar';
 
+function StartupFailed() {
+  const { failure } = useApp();
+  return (
+    <main class="gate">
+      <div class="gate-card narrow">
+        <Logo size={56} />
+        <h1>Veil could not start</h1>
+        <p class="muted">{failure}. Your data is untouched.</p>
+        <button class="btn primary lg" onClick={() => location.reload()}>Reload</button>
+      </div>
+    </main>
+  );
+}
+
 function Toasts() {
   const { toasts } = useApp();
   return (
@@ -85,6 +99,7 @@ export function App() {
       {phase === 'handoff' && <Handoff />}
       {phase === 'restoring' && <RestoringScreen />}
       {phase === 'elsewhere' && <Elsewhere />}
+      {phase === 'failed' && <StartupFailed />}
       {phase === 'ready' && <Main />}
       <Toasts />
     </>

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type { Contact, Message, Profile, Settings } from '../storage/repo';
 import { DEFAULT_SETTINGS } from '../storage/repo';
 
-export type Phase = 'loading' | 'unsupported' | 'onboarding' | 'locked' | 'ready' | 'handoff' | 'restoring' | 'elsewhere';
+export type Phase = 'loading' | 'unsupported' | 'onboarding' | 'locked' | 'ready' | 'handoff' | 'restoring' | 'elsewhere' | 'failed';
 
 export type ConnectFlow =
   | {
@@ -63,6 +63,8 @@ export interface AppState {
   handoffMessage?: string;
   view: 'chats' | 'settings' | 'info';
   restoring?: { phase: string; done: number; total: number };
+  /** Why startup failed (shown with a reload button). */
+  failure?: string;
   /** Why this window is inactive: another one is open, or took over from us. */
   elsewhere?: 'open' | 'taken';
   /** A new app version is installed and waiting for a reload. */

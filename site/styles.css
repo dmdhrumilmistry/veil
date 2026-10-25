@@ -1079,3 +1079,6 @@ ul, ol { margin: 0; padding: 0; }
   .js .reveal { opacity: 1; transform: none; }
   .progress-bar { width: 68%; }
 }
+
+.install-alt { margin-top: 14px; font-size: 14px; color: var(--muted); }
+.install-alt a { color: var(--primary); font-weight: 600; }

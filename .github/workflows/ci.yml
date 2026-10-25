@@ -36,6 +36,11 @@ jobs:
   flutter:
     runs-on: ubuntu-latest
     steps:
+      - name: Free disk space (Android + Flutter builds need room)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules/@aws-amplify || true
+          docker image prune -af >/dev/null 2>&1 || true
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
