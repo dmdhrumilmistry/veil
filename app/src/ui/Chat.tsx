@@ -62,6 +62,7 @@ function StatusIcon({ m }: { m: Message }) {
   if (m.dir === 'in') return null;
   const map = {
     sending: ['clock', 'Sending'],
+    queued: ['mail', 'Waiting in their mailbox'],
     sent: ['check', 'Sent'],
     delivered: ['checks', 'Delivered'],
     read: ['checks', 'Read'],
@@ -262,7 +263,7 @@ function Bubble({ m, first, last }: { m: Message; first: boolean; last: boolean 
 
 // ------------------------------------------------------------------ composer
 
-function Composer({ chat, enabled, name }: { chat: string; enabled: boolean; name: string }) {
+function Composer({ chat, enabled, name, live }: { chat: string; enabled: boolean; name: string; live: boolean }) {
   const { settings } = useApp();
   const [text, setText] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
@@ -273,6 +274,7 @@ function Composer({ chat, enabled, name }: { chat: string; enabled: boolean; nam
     const el = area.current;
     if (!el) return;
     el.rows = 1;
+    if (!text) return; // placeholder text must not grow the box
     const line = parseFloat(getComputedStyle(el).lineHeight) || 22;
     const pad = 22;
     el.rows = Math.max(1, Math.min(7, Math.round((el.scrollHeight - pad) / line)));
@@ -291,7 +293,7 @@ function Composer({ chat, enabled, name }: { chat: string; enabled: boolean; nam
 
   return (
     <form class="composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-      <button type="button" class="icon-btn attach" aria-label="Attach files" title="Attach files" disabled={!enabled} onClick={() => fileInput.current?.click()}>
+      <button type="button" class="icon-btn attach" aria-label="Attach files" title={live ? 'Attach files' : 'Files need a live connection'} disabled={!live} onClick={() => fileInput.current?.click()}>
         <Icon name="plus" />
       </button>
       <input ref={fileInput} type="file" multiple hidden onChange={(e) => { const f = e.currentTarget.files; if (f?.length) void sendFiles(chat, f); e.currentTarget.value = ''; }} />
@@ -302,7 +304,7 @@ function Composer({ chat, enabled, name }: { chat: string; enabled: boolean; nam
           value={text}
           disabled={!enabled}
           maxLength={16000}
-          placeholder={enabled ? `Message ${name}` : 'Reconnect to send messages'}
+          placeholder={!enabled ? 'Reconnect to send messages' : live ? `Message ${name}` : `Leave ${name} a message`}
           aria-label="Message"
           enterkeyhint={settings.enterToSend ? 'send' : 'enter'}
           onInput={(e) => { setText(e.currentTarget.value); sendTyping(chat); }}
@@ -314,7 +316,7 @@ function Composer({ chat, enabled, name }: { chat: string; enabled: boolean; nam
           }}
           onPaste={(e) => {
             const files = e.clipboardData?.files;
-            if (files?.length && enabled) {
+            if (files?.length && live) {
               e.preventDefault();
               void sendFiles(chat, files);
             }
@@ -332,9 +334,10 @@ function Composer({ chat, enabled, name }: { chat: string; enabled: boolean; nam
 // ------------------------------------------------------------------ chat
 
 export function Chat({ contact }: { contact: Contact }) {
-  const { messages, presence, typing } = useApp();
+  const { messages, presence, typing, offline } = useApp();
   const list = messages[contact.id];
   const online = presence[contact.id] === 'online';
+  const mailable = !!offline[contact.id];
   const isTyping = (typing[contact.id] ?? 0) > Date.now() - 4000;
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -405,7 +408,7 @@ export function Chat({ contact }: { contact: Contact }) {
               {contact.verified && <Icon name="shieldCheck" size={15} class="verified" />}
             </span>
             <span class={`chat-status ${online ? 'on' : ''} ${isTyping ? 'typing' : ''}`}>
-              {isTyping ? 'typing...' : online ? (<><Icon name="lock" size={11} /> End-to-end encrypted</>) : 'Offline'}
+              {isTyping ? 'typing...' : online ? (<><Icon name="lock" size={11} /> End-to-end encrypted</>) : mailable ? (<><Icon name="mail" size={11} /> Offline - messages wait in their mailbox</>) : 'Offline'}
               {contact.disappearSecs > 0 && <span class="ttl-chip"><Icon name="clock" size={11} /> {formatTtl(contact.disappearSecs)}</span>}
             </span>
           </span>
@@ -423,13 +426,13 @@ export function Chat({ contact }: { contact: Contact }) {
       </header>
 
       {!online && (
-        <div class="offline-banner" role="status">
-          <span class="ob-icon"><Icon name="plug" size={16} /></span>
+        <div class={`offline-banner ${mailable ? 'mailable' : ''}`} role="status">
+          <span class="ob-icon"><Icon name={mailable ? 'mail' : 'plug'} size={16} /></span>
           <span class="ob-text">
-            <b>Not connected</b>
-            <span>No servers means a fresh invite each session.</span>
+            <b>{mailable ? `${name} is offline` : 'Not connected'}</b>
+            <span>{mailable ? 'Messages are encrypted and wait in their mailbox. Reconnect to send files.' : 'Reconnect with a fresh invite to keep chatting.'}</span>
           </span>
-          <button class="btn primary sm" onClick={() => void createInvite(contact.id)}>Reconnect</button>
+          <button class={`btn ${mailable ? 'ghost' : 'primary'} sm`} onClick={() => void createInvite(contact.id)}>Reconnect</button>
         </div>
       )}
 
@@ -473,7 +476,7 @@ export function Chat({ contact }: { contact: Contact }) {
         </button>
       )}
 
-      <Composer chat={contact.id} enabled={online} name={name} />
+      <Composer chat={contact.id} enabled={online || mailable} live={online} name={name} />
       {drag && <div class="drop-overlay" aria-hidden="true"><Icon name="clip" size={36} /><p>Drop to send to {name}</p></div>}
     </section>
   );

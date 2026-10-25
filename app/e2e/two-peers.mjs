@@ -4,7 +4,9 @@
  * strict CSP produced no violations. Run after `npm run build`.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 
 const PORT = 4200 + Math.floor(Math.random() * 700);
@@ -12,12 +14,24 @@ const BASE = `http://localhost:${PORT}/`;
 const SHOTS = process.env.SHOTS_DIR;
 const PASS = 'correct horse battery staple';
 
-const server = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'pipe' });
+const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'pipe' });
+
+// A real mailbox relay for the offline-delivery scenario.
+const RELAY_PORT = PORT + 1000;
+const relayDir = mkdtempSync(join(tmpdir(), 'veil-e2e-relay-'));
+const relayProc = spawn(process.execPath, ['../relay/src/main.ts'], { stdio: 'pipe', env: { ...process.env, PORT: String(RELAY_PORT), VEIL_RELAY_DATA: relayDir } });
+const RELAY = `http://127.0.0.1:${RELAY_PORT}`;
 const fail = (msg) => {
   console.error('FAIL:', msg);
   server.kill('SIGKILL');
+  relayProc.kill('SIGKILL');
   process.exit(1);
 };
+await new Promise((resolve, reject) => {
+  relayProc.stdout.on('data', (d) => String(d).includes('listening') && resolve());
+  relayProc.on('exit', () => reject(new Error('relay exited')));
+  setTimeout(() => reject(new Error('relay timeout')), 15000);
+});
 await new Promise((resolve, reject) => {
   server.stdout.on('data', (d) => String(d).includes(String(PORT)) && resolve());
   server.on('exit', () => reject(new Error('preview server exited')));
@@ -85,6 +99,21 @@ try {
   await alice.getByText('End-to-end encrypted', { exact: true }).waitFor({ timeout: 20000 });
   await bob.getByText('End-to-end encrypted', { exact: true }).waitFor({ timeout: 20000 });
   console.log('connected + handshake verified');
+
+  // Both set up a mailbox while connected, so the cards travel over the live session.
+  const setupMailbox = async (page, mobile) => {
+    if (mobile) await page.getByRole('button', { name: 'Back to chats' }).click();
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByLabel('Relay address').fill(RELAY);
+    await page.getByRole('button', { name: 'Set up' }).click();
+    await page.getByText(`Mailbox on 127.0.0.1:${RELAY_PORT}`).waitFor({ timeout: 15000 });
+    if (mobile) await page.getByRole('button', { name: 'Back', exact: true }).click();
+  };
+  await setupMailbox(alice, false);
+  await setupMailbox(bob, true);
+  await alice.getByRole('button', { name: /Bob/ }).first().click();
+  await bob.getByRole('button', { name: /Alice/ }).first().click();
+  console.log('mailboxes set up on a local relay');
 
   // Messages both ways.
   await alice.getByLabel('Message', { exact: true }).fill('Hello Bob, this never touches a server');
@@ -237,6 +266,34 @@ try {
   await alice.getByRole('heading', { name: 'Veil is locked' }).waitFor();
   console.log('single active window handover ok');
 
+  // Offline delivery: Alice and Bob are no longer connected (Alice locked earlier).
+  await alice.getByPlaceholder('Passphrase').fill(PASS);
+  await alice.getByRole('button', { name: 'Unlock' }).click();
+  await alice.getByRole('button', { name: /Bob/ }).first().click();
+  await alice.getByText('Bob is offline').waitFor();
+  await alice.getByLabel('Message', { exact: true }).fill('sent while you were away');
+  await alice.keyboard.press('Enter');
+  await alice.getByLabel('Waiting in their mailbox').last().waitFor({ timeout: 15000 });
+  const relayFiles = ['relay.db', 'relay.db-wal'].map((f) => { try { return readFileSync(join(relayDir, f)); } catch { return Buffer.alloc(0); } });
+  if (relayFiles.some((b) => b.includes(Buffer.from('sent while you were away')))) fail('plaintext on the relay');
+  await shot(alice, 'offline-queued.png');
+  // Bob comes back: Veil checks the mailbox when it becomes visible.
+  const wake = (page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await bob.getByRole('button', { name: 'Back', exact: true }).click();
+  await wake(bob);
+  await bob.locator('p.text', { hasText: 'sent while you were away' }).waitFor({ timeout: 15000 });
+  await shot(bob, 'offline-received.png');
+  // Bob's read receipt travels back through Alice's mailbox.
+  await wake(alice);
+  await alice.getByLabel('Read').last().waitFor({ timeout: 15000 });
+  // ...and Bob can reply while Alice is "away" too.
+  await bob.getByLabel('Message', { exact: true }).fill('got it, replying offline');
+  await bob.keyboard.press('Enter');
+  await bob.getByLabel('Waiting in their mailbox').last().waitFor({ timeout: 15000 });
+  await wake(alice);
+  await alice.locator('p.text', { hasText: 'got it, replying offline' }).waitFor({ timeout: 15000 });
+  console.log('offline messages via mailbox ok (queued, delivered, read receipt, reply; relay saw only ciphertext)');
+
   // Data at rest must not contain plaintext.
   const leaked = await alice.evaluate(async () => {
     const db = await new Promise((r) => { const q = indexedDB.open('veil'); q.onsuccess = () => r(q.result); });
@@ -261,6 +318,7 @@ try {
   fail(e.stack || e.message);
 } finally {
   server.kill('SIGKILL');
+  relayProc.kill('SIGKILL');
   await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 3000))]);
 }
 process.exit(0);

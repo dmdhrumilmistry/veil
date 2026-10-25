@@ -20,7 +20,7 @@ import { sdpFingerprint } from './signaling';
 export type AppMessage = { t: string; [k: string]: unknown };
 
 export interface SessionEvents {
-  ready(peer: Uint8Array): void;
+  ready(peer: Uint8Array, asyncRoot: Uint8Array): void;
   message(msg: AppMessage): void;
   /** Awaited, so slow storage applies natural backpressure to the sender. */
   chunk(fileId: string, index: number, data: Uint8Array): Promise<void> | void;
@@ -138,7 +138,7 @@ export class Session {
     this.bulkTx = new SendChain(keys.bulkSend, 'veil/v1/bulk');
     this.bulkRx = new RecvChain(keys.bulkRecv, 'veil/v1/bulk');
     for (const k of [keys.ctrlSend, keys.ctrlRecv, keys.bulkSend, keys.bulkRecv]) k.fill(0);
-    this.ev.ready(keys.peerIdentity);
+    this.ev.ready(keys.peerIdentity, keys.asyncRoot);
   }
 
   send(msg: AppMessage): Promise<void> {

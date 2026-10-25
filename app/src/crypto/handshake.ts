@@ -15,7 +15,8 @@ import { ed25519Sign, ed25519Verify, exportRaw, hkdf, sha256, x25519, x25519Gene
  *                       id_R, eph_R, kem_ct_R, nonce_R) )
  *   sig_X = Ed25519_X( "veil/v1/sig/" || X || T )
  *   ss    = X25519(eph_I, eph_R) || ML-KEM-768.Decaps(kem_ct_R)
- *   keys  = HKDF-SHA-256(ikm = ss, salt = T, info = "veil/v1/chains", 128 bytes)
+ *   keys  = HKDF-SHA-256(ikm = ss, salt = T, info = "veil/v1/chains", 160 bytes)
+ *         = ctrl/bulk chain keys (4 x 32) || async root (32, seeds the offline Double Ratchet)
  *
  * Properties:
  *   - Confidentiality holds if EITHER X25519 or ML-KEM-768 is unbroken (hybrid).
@@ -37,6 +38,8 @@ export interface SessionKeys {
   ctrlRecv: Bytes;
   bulkSend: Bytes;
   bulkRecv: Bytes;
+  /** Post-quantum secret that seeds the Double Ratchet for offline messages. */
+  asyncRoot: Bytes;
   peerIdentity: Bytes;
   transcript: Bytes;
 }
@@ -147,10 +150,10 @@ export class Handshake {
   }
 
   private async derive(ss: Bytes, transcript: Bytes, peer: Bytes): Promise<SessionKeys> {
-    const okm = await hkdf(ss, transcript, INFO, 128);
+    const okm = await hkdf(ss, transcript, INFO, 160);
     wipe(ss);
     const k = (i: number) => okm.slice(i * 32, (i + 1) * 32);
-    const [ctrlI2R, ctrlR2I, bulkI2R, bulkR2I] = [k(0), k(1), k(2), k(3)];
+    const [ctrlI2R, ctrlR2I, bulkI2R, bulkR2I, asyncRoot] = [k(0), k(1), k(2), k(3), k(4)];
     wipe(okm);
     const initiator = this.o.role === 'initiator';
     return {
@@ -158,6 +161,7 @@ export class Handshake {
       ctrlRecv: initiator ? ctrlR2I : ctrlI2R,
       bulkSend: initiator ? bulkI2R : bulkR2I,
       bulkRecv: initiator ? bulkR2I : bulkI2R,
+      asyncRoot,
       peerIdentity: peer,
       transcript,
     };

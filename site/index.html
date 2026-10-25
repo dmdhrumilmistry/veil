@@ -211,6 +211,11 @@
           <p>Fresh ephemeral keys every session and a per-message key chain. Each message key is deleted after use.</p>
         </article>
         <article class="card feature reveal">
+          <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m4 7 8 6 8-6"/></svg></div>
+          <h3>Offline mailbox (optional)</h3>
+          <p>Leave messages for contacts who are away. A self-hosted relay holds only padded, Double Ratchet encrypted envelopes and wakes them with an empty push.</p>
+        </article>
+        <article class="card feature reveal">
           <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 19h14"/></svg></div>
           <h3>Encrypted backups</h3>
           <p>Export everything to one encrypted file you control, and restore it on a new device. No cloud account involved.</p>
@@ -518,7 +523,7 @@
         </details>
         <details class="reveal">
           <summary>Why do I have to exchange a new invite every session?</summary>
-          <p>Because there is no server to rendezvous through. Cloud messengers can reconnect you automatically because their servers know where you are. Veil deliberately has no such server, so each new session starts with a fresh invite and reply exchange over a channel you choose. It is a small amount of friction in exchange for not having a middleman.</p>
+          <p>Because there is no server to rendezvous through. Cloud messengers can reconnect you automatically because their servers know where you are. Veil deliberately has no such server, so each new live session starts with a fresh invite and reply exchange over a channel you choose. If your contact runs a mailbox relay, you can still leave them encrypted messages in between.</p>
         </details>
         <details class="reveal">
           <summary>Does Veil use any servers at all?</summary>
@@ -547,6 +552,10 @@
         <details class="reveal">
           <summary>Why doesn't the app on my iPhone show my Safari chats?</summary>
           <p>On iPhone and iPad, apps added to the Home Screen get their own storage, completely separate from Safari, so they act as two different installations. Install Veil before you start chatting, or move your data: in Safari open Settings, create a backup, then choose "Restore from a backup" in the Home Screen app. On Android and desktop, the installed app and the browser share the same data, and Veil runs in one window at a time to keep it in sync.</p>
+        </details>
+        <details class="reveal">
+          <summary>Can I message someone who is offline?</summary>
+          <p>Yes, if they set up a mailbox relay - a tiny service anyone can run with one Docker command. Your message is encrypted with the Signal Double Ratchet (seeded from Veil's post-quantum handshake), padded, and left in their mailbox with no sender id. The relay only ever holds ciphertext and deletes it once collected. It can also wake their device with an empty push notification. Without a relay, Veil stays purely peer-to-peer.</p>
         </details>
         <details class="reveal">
           <summary>How do backups work without a cloud?</summary>

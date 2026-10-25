@@ -32,6 +32,8 @@ describe('handshake', () => {
     expect(toB64u(ki.ctrlSend)).toBe(toB64u(kr.ctrlRecv));
     expect(toB64u(ki.ctrlRecv)).toBe(toB64u(kr.ctrlSend));
     expect(toB64u(ki.bulkSend)).toBe(toB64u(kr.bulkRecv));
+    expect(toB64u(ki.asyncRoot)).toBe(toB64u(kr.asyncRoot));
+    expect(toB64u(ki.asyncRoot)).not.toBe(toB64u(ki.ctrlSend));
     expect(toB64u(ki.ctrlSend)).not.toBe(toB64u(ki.ctrlRecv));
     expect(toB64u(ki.peerIdentity)).toBe(toB64u(b.pub));
     expect(toB64u(kr.peerIdentity)).toBe(toB64u(a.pub));

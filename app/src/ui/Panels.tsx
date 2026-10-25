@@ -20,6 +20,7 @@ import { MIN_PASSPHRASE, strength } from './passphrase';
 import { Icon, Logo, type IconName } from './icons';
 import { InstallCard } from './Install';
 import { BackupCard } from './Backup';
+import { MailboxCard } from './Mailbox';
 import { notifyPermission, requestNotifyPermission, type NotifyPermission } from '../state/notify';
 import { Qr } from './Qr';
 
@@ -43,7 +44,7 @@ function PanelHead({ title, onBack }: { title: string; onBack: () => void }) {
 }
 
 export function ContactInfo({ contact }: { contact: Contact }) {
-  const { myId, presence } = useApp();
+  const { myId, presence, offline } = useApp();
   const [alias, setAlias] = useState(contact.alias ?? '');
   const [danger, setDanger] = useState<'' | 'clear' | 'delete'>('');
   const number = useMemo(() => safetyNumber(peerPub(myId), peerPub(contact.id)), [myId, contact.id]);
@@ -57,10 +58,16 @@ export function ContactInfo({ contact }: { contact: Contact }) {
           <Avatar contact={contact} size="lg" online={presence[contact.id] === 'online'} />
           <h3>{displayName(contact)}</h3>
           {contact.alias && contact.name && <p class="muted">Calls themselves "{contact.name}"</p>}
-          <span class={`verify-chip ${contact.verified ? 'ok' : ''}`}>
-            <Icon name={contact.verified ? 'shieldCheck' : 'shield'} size={16} />
-            {contact.verified ? 'Verified' : 'Not verified'}
-          </span>
+          <div class="row center wrap">
+            <span class={`verify-chip ${contact.verified ? 'ok' : ''}`}>
+              <Icon name={contact.verified ? 'shieldCheck' : 'shield'} size={16} />
+              {contact.verified ? 'Verified' : 'Not verified'}
+            </span>
+            <span class={`verify-chip ${offline[contact.id] ? 'ok' : ''}`} title={contact.mailbox ? `Mailbox on ${new URL(contact.mailbox.relay).host}` : 'They have no mailbox relay'}>
+              <Icon name="mail" size={16} />
+              {offline[contact.id] ? 'Offline messages on' : contact.mailbox ? 'Connect once to enable offline messages' : 'No offline mailbox'}
+            </span>
+          </div>
         </div>
 
         <div class="card">
@@ -253,6 +260,8 @@ export function SettingsPanel() {
         </div>
 
         <BackupCard />
+
+        <MailboxCard />
 
         <NotificationsCard />
 

@@ -1,13 +1,16 @@
 import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
-import { randomId, toHex } from '../crypto/encoding';
+import { concat, fromB64u, fromUtf8, randomId, toB64u, toHex, utf8, wipe } from '../crypto/encoding';
+import { generateRatchetKey, Ratchet, type DhKeyPair } from '../crypto/ratchet';
+import { ackMail, createMailbox, deleteMailbox, fetchMail, normalizeRelayUrl, openEnvelope, postToMailbox, relayInfo, RelayError, sealEnvelope, setPushEndpoint, type MyMailbox } from '../net/mailbox';
 import { peerId, peerPub, samePub, type Identity } from '../crypto/identity';
-import { cryptoSupported } from '../crypto/primitives';
+import { aesKey, cryptoSupported, hkdf } from '../crypto/primitives';
 import { acceptAnswer, acceptOffer, createPeer, makeOffer, type PeerLink } from '../net/peer';
 import { Session, type AppMessage } from '../net/session';
+import { SerialQueue } from '../crypto/chain';
 import { decodeSignal, encodeSignal, extractCode, signalLink } from '../net/signaling';
 import * as idb from '../storage/idb';
 import { BackupWriter, readBackup } from '../storage/backup';
-import { CHUNK_STORE_SIZE, DEFAULT_SETTINGS, Repo, type Contact, type FileMeta, type Message, type MessagePreview, type Settings, type StoredIdentity } from '../storage/repo';
+import { CHUNK_STORE_SIZE, DEFAULT_SETTINGS, Repo, type Contact, type FileMeta, type Message, type AsyncState, type MessagePreview, type Settings, type StoredIdentity } from '../storage/repo';
 import { Vault } from '../storage/vault';
 import { claimInstance, heldElsewhere, onInstanceLost } from './instance';
 import { clearNotifications, notify, onNotificationOpen, resetNotifications } from './notify';
@@ -143,6 +146,7 @@ async function enter() {
   store.set({ phase: 'ready', myId: peerId(identity!.pub), profile, settings, contacts: sortContacts(contacts), messages: {}, presence: {}, view: 'chats' });
   armAutoLock();
   sweepTimer = setInterval(() => void sweepExpired(), 10_000);
+  await loadOffline();
   void sweepExpired(true);
   if (pendingCode) {
     const c = pendingCode;
@@ -166,6 +170,7 @@ function teardown() {
   outgoing.clear();
   incoming.clear();
   resetNotifications();
+  stopOffline();
   repo?.vault.lock();
   repo = undefined;
   identity = undefined;
@@ -245,7 +250,7 @@ export async function updateContact(id: string, patch: Partial<Contact>) {
 
 export async function setDisappearing(id: string, secs: number) {
   await updateContact(id, { disappearSecs: secs });
-  void sessions.get(id)?.send({ t: 'disappear', secs }).catch(() => {});
+  void sendApp(id, { t: 'disappear', secs }).catch(() => {});
   await addSystemNote(id, secs ? `Disappearing messages set to ${formatTtl(secs)}` : 'Disappearing messages turned off');
 }
 
@@ -258,6 +263,8 @@ export function formatTtl(secs: number) {
 export async function deleteContact(id: string) {
   sessions.get(id)?.close('Contact deleted');
   await R().deleteContact(id);
+  asyncCache.delete(id);
+  seeds.delete(id);
   store.set((s) => {
     const messages = { ...s.messages };
     delete messages[id];
@@ -289,7 +296,7 @@ export async function markRead(id: string) {
   const unread = (S().messages[id] ?? []).filter((m) => m.dir === 'in' && m.status !== 'read');
   if (!unread.length) return;
   for (const m of unread) await setMessage({ ...m, status: 'read' });
-  void sessions.get(id)?.send({ t: 'receipt', s: 'read', ids: unread.map((m) => m.id) }).catch(() => {});
+  void sendApp(id, { t: 'receipt', s: 'read', ids: unread.map((m) => m.id) }).catch(() => {});
 }
 
 // ------------------------------------------------------------------ messages
@@ -345,8 +352,7 @@ export async function sendText(chat: string, text: string) {
   const body = text.trim();
   if (!body) return;
   if (body.length > MAX_TEXT) return toast(`Messages are limited to ${MAX_TEXT} characters`, 'error');
-  const s = sessions.get(chat);
-  if (!s?.isReady) return toast('Not connected - reconnect to send', 'error');
+  if (!sessions.get(chat)?.isReady && !canMail(chat)) return toast('Not connected - reconnect to send', 'error');
   const c = contact(chat)!;
   const ts = Date.now();
   const m: Message = {
@@ -361,8 +367,8 @@ export async function sendText(chat: string, text: string) {
   };
   await addMessage(m);
   try {
-    await s.send({ t: 'msg', id: m.id, ts, text: body, ttl: c.disappearSecs || undefined });
-    await setMessage({ ...m, status: 'sent' });
+    const via = await sendApp(chat, { t: 'msg', id: m.id, ts, text: body, ttl: c.disappearSecs || undefined });
+    await setMessage({ ...m, status: via === 'live' ? 'sent' : via === 'mailbox' ? 'queued' : 'sending' });
   } catch {
     await setMessage({ ...m, status: 'failed' });
   }
@@ -415,9 +421,15 @@ const str = (v: unknown, max: number) => (typeof v === 'string' && v.length <= m
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
 const isId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{16,32}$/.test(v);
 
-async function onAppMessage(chat: string, m: AppMessage) {
-  const s = sessions.get(chat);
+async function onAppMessage(chat: string, m: AppMessage, via: 'live' | 'mailbox' = 'live') {
+  if (via === 'mailbox' && !MAILBOX_TYPES.has(m.t)) return;
   switch (m.t) {
+    case 'mailbox':
+      return onMailboxCard(chat, m);
+    case 'ratchet-init':
+      return onRatchetInit(chat, m);
+    case 'ratchet-hello':
+      return onRatchetHello(chat, m);
     case 'profile': {
       const name = str(m.name, MAX_NAME);
       if (name !== undefined) await updateContact(chat, { name });
@@ -440,7 +452,7 @@ async function onAppMessage(chat: string, m: AppMessage) {
         expiresAt: ttl ? now + ttl * 1000 : undefined,
       };
       await addMessage(msg);
-      void s?.send({ t: 'receipt', s: 'delivered', ids: [m.id] }).catch(() => {});
+      void sendApp(chat, { t: 'receipt', s: 'delivered', ids: [m.id] }).catch(() => {});
       await afterIncoming(chat, 'message');
       return;
     }
@@ -772,10 +784,18 @@ export function closeConnect() {
 
 function sessionEvents(p: Pending) {
   let chat = '';
+  // Messages can arrive while onReady is still persisting the contact; hold them.
+  const early: AppMessage[] = [];
+  const handle = (m: AppMessage) => void onAppMessage(chat, m).catch((e) => console.warn('[veil]', e));
   return {
-    ready: (peer: Uint8Array) => void onReady(p, peer).then((id) => (chat = id)),
+    ready: (peer: Uint8Array, asyncRoot: Uint8Array) =>
+      void onReady(p, peer, asyncRoot).then((id) => {
+        chat = id;
+        early.splice(0).forEach(handle);
+      }),
     message: (m: AppMessage) => {
-      if (chat) void onAppMessage(chat, m).catch((e) => console.warn('[veil]', e));
+      if (chat) handle(m);
+      else if (early.length < 100) early.push(m);
     },
     chunk: (fileId: string, index: number, data: Uint8Array) => (chat ? onChunk(chat, fileId, index, data) : undefined),
     drain: () => {},
@@ -799,7 +819,7 @@ function sessionEvents(p: Pending) {
   };
 }
 
-async function onReady(p: Pending, peer: Uint8Array): Promise<string> {
+async function onReady(p: Pending, peer: Uint8Array, asyncRoot: Uint8Array): Promise<string> {
   const id = peerId(peer);
   const existing = contact(id);
   const now = Date.now();
@@ -813,6 +833,8 @@ async function onReady(p: Pending, peer: Uint8Array): Promise<string> {
   if (pending === p) pending = undefined;
   store.set((s) => ({ presence: { ...s.presence, [id]: 'online' }, connect: null }));
   void p.session!.send({ t: 'profile', name: S().profile.name }).catch(() => {});
+  await startAsync(p, id, peer, asyncRoot).catch((e) => console.warn('[veil] offline setup failed:', e));
+  void flushOutbox();
   if (!existing) await addSystemNote(id, 'Connected. Compare safety numbers to verify this contact.');
   toast(`Securely connected to ${displayName(c)}`, 'success');
   void notify({ chat: id, kind: 'connected', name: displayName(c) });
@@ -1090,3 +1112,324 @@ export async function restoreBackup(file: Blob, backupPass: string, devicePass: 
     throw err;
   }
 }
+
+// ------------------------------------------------------------------ offline messages (mailbox relay + Double Ratchet)
+
+/** Message types that may arrive through a mailbox. Everything else needs a live session. */
+const MAILBOX_TYPES = new Set(['msg', 'receipt', 'profile', 'disappear', 'mailbox']);
+const MAX_EPOCHS = 2;
+const POLL_MS = 30_000;
+
+let myMailbox: MyMailbox | undefined;
+const asyncCache = new Map<string, AsyncState>();
+const asyncQueues = new Map<string, SerialQueue>();
+const envKeys = new Map<string, CryptoKey>();
+let pollTimer: ReturnType<typeof setInterval> | undefined;
+let polling: Promise<void> | undefined;
+
+/** Per-live-session secrets used once to (re)seed the ratchet, then wiped. */
+interface LiveSeed {
+  role: 'initiator' | 'responder';
+  sk: Uint8Array;
+  env: string;
+  ad: Uint8Array;
+  bob?: DhKeyPair;
+}
+const seeds = new Map<string, LiveSeed>();
+
+function asyncQueue(chat: string) {
+  let q = asyncQueues.get(chat);
+  if (!q) asyncQueues.set(chat, (q = new SerialQueue()));
+  return q;
+}
+
+async function envKey(b64: string): Promise<CryptoKey> {
+  let k = envKeys.get(b64);
+  if (!k) envKeys.set(b64, (k = await aesKey(fromB64u(b64))));
+  return k;
+}
+
+/** Can we leave a message for this contact while they are offline? */
+export function canMail(chat: string): boolean {
+  return !!contact(chat)?.mailbox && !!asyncCache.get(chat)?.epochs.length;
+}
+
+function publishOffline() {
+  const offline: Record<string, boolean> = {};
+  for (const c of S().contacts) offline[c.id] = canMail(c.id);
+  store.set({ offline, mailbox: myMailbox ? { relay: myMailbox.relay, push: !!myMailbox.push } : undefined });
+}
+
+async function loadOffline() {
+  myMailbox = await R().getMailbox();
+  for (const c of S().contacts) {
+    const st = await R().getAsync(c.id);
+    if (st) asyncCache.set(c.id, st);
+  }
+  publishOffline();
+  void pollMailbox();
+  void flushOutbox();
+  pollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') void pollMailbox();
+    void flushOutbox();
+  }, POLL_MS);
+}
+
+function stopOffline() {
+  clearInterval(pollTimer);
+  for (const s of seeds.values()) wipe(s.sk);
+  seeds.clear();
+  asyncCache.clear();
+  asyncQueues.clear();
+  envKeys.clear();
+  myMailbox = undefined;
+}
+
+/**
+ * Sends an application message: over the live session when connected, otherwise
+ * Double-Ratchet encrypted into the contact's mailbox (or the outbox if their relay is
+ * unreachable right now).
+ */
+async function sendApp(chat: string, msg: AppMessage, queueable = true): Promise<'live' | 'mailbox' | 'outbox'> {
+  const s = sessions.get(chat);
+  if (s?.isReady) {
+    await s.send(msg);
+    return 'live';
+  }
+  if (!queueable || !MAILBOX_TYPES.has(msg.t) || !canMail(chat)) throw new Error('not connected');
+  return asyncQueue(chat).run(async () => {
+    const c = contact(chat)!;
+    const st = asyncCache.get(chat)!;
+    const ep = st.epochs[0]!;
+    const r = Ratchet.fromJSON(ep.ratchet);
+    if (!r.canSend) throw new Error('offline channel not ready');
+    const sealed = await r.encrypt(utf8(JSON.stringify(msg)));
+    // Persist the advanced ratchet before anything leaves the device.
+    ep.ratchet = r.toJSON();
+    await R().saveAsync(chat, st);
+    const envelope = await sealEnvelope(await envKey(ep.envKey), sealed);
+    const item = { id: randomId(), chat, msgId: msg.t === 'msg' ? String(msg.id) : undefined, relay: c.mailbox!.relay, sid: c.mailbox!.sid, envelope: toB64u(envelope), tries: 0 };
+    try {
+      await postToMailbox(item.relay, item.sid, envelope);
+      return 'mailbox' as const;
+    } catch (err) {
+      if (err instanceof RelayError && err.status === 404) {
+        await updateContact(chat, { mailbox: undefined });
+        publishOffline();
+        throw err;
+      }
+      await R().saveOutbox(item);
+      return 'outbox' as const;
+    }
+  });
+}
+
+let flushing = false;
+async function flushOutbox() {
+  if (!repo || flushing) return;
+  flushing = true;
+  try {
+    for (const item of await R().listOutbox()) {
+      try {
+        await postToMailbox(item.relay, item.sid, fromB64u(item.envelope));
+        await R().deleteOutbox(item.id);
+        const m = item.msgId ? findMessage(item.chat, (x) => x.id === item.msgId) : undefined;
+        if (m && m.status === 'sending') await setMessage({ ...m, status: 'queued' });
+      } catch (err) {
+        const gone = err instanceof RelayError && err.status === 404;
+        if (gone || item.tries >= 200) {
+          await R().deleteOutbox(item.id);
+          const m = item.msgId ? findMessage(item.chat, (x) => x.id === item.msgId) : undefined;
+          if (m) await setMessage({ ...m, status: 'failed' });
+        } else {
+          await R().saveOutbox({ ...item, tries: item.tries + 1 });
+        }
+      }
+    }
+  } finally {
+    flushing = false;
+  }
+}
+
+/** Fetches, decrypts and acknowledges everything waiting in our mailbox. */
+export function pollMailbox(): Promise<void> {
+  if (!repo || !myMailbox) return Promise.resolve();
+  polling ??= (async () => {
+    const mb = myMailbox!;
+    try {
+      let after = 0;
+      for (;;) {
+        const { messages, more } = await fetchMail(mb, after);
+        for (const m of messages) {
+          await receiveEnvelope(m.body).catch((e) => console.warn('[veil] mailbox message dropped:', (e as Error).message));
+          after = m.id;
+        }
+        if (messages.length) await ackMail(mb, after);
+        if (!more) break;
+      }
+      store.set({ mailboxError: undefined });
+    } catch (err) {
+      if (err instanceof RelayError && err.status === 404) {
+        store.set({ mailboxError: 'Your mailbox no longer exists on the relay. Set it up again.' });
+      } else {
+        store.set({ mailboxError: (err as Error).message });
+      }
+    }
+  })().finally(() => (polling = undefined));
+  return polling;
+}
+
+async function receiveEnvelope(body: Uint8Array) {
+  // Trial decryption: the envelope carries no sender id.
+  for (const [chat, st] of asyncCache) {
+    for (const ep of st.epochs) {
+      const inner = await openEnvelope(await envKey(ep.envKey), body);
+      if (!inner) continue;
+      const msg = await asyncQueue(chat).run(async () => {
+        const r = Ratchet.fromJSON(ep.ratchet);
+        const plain = await r.decrypt(inner);
+        ep.ratchet = r.toJSON();
+        await R().saveAsync(chat, st);
+        return JSON.parse(fromUtf8(plain)) as AppMessage;
+      });
+      if (msg && typeof msg.t === 'string') await onAppMessage(chat, msg, 'mailbox');
+      return;
+    }
+  }
+}
+
+/** Runs once per live session to give both sides a fresh post-quantum-seeded ratchet. */
+async function startAsync(p: Pending, chat: string, peer: Uint8Array, asyncRoot: Uint8Array) {
+  const zero = new Uint8Array(32);
+  const sk = await hkdf(asyncRoot, zero, utf8('veil/v1/ratchet/sk'), 32);
+  const env = await hkdf(asyncRoot, zero, utf8('veil/v1/mailbox/env'), 32);
+  wipe(asyncRoot);
+  const me = identity!.pub;
+  const [i, r] = p.role === 'initiator' ? [me, peer] : [peer, me];
+  const seed: LiveSeed = { role: p.role, sk, env: toB64u(env), ad: concat(utf8('veil/v1/ratchet/ad'), i, r) };
+  wipe(env);
+  const old = seeds.get(chat);
+  if (old) wipe(old.sk);
+  seeds.set(chat, seed);
+  if (p.role === 'responder') {
+    seed.bob = await generateRatchetKey();
+    await p.session!.send({ t: 'ratchet-init', pub: toB64u(seed.bob.pub) });
+  }
+  if (myMailbox) await p.session!.send({ t: 'mailbox', relay: myMailbox.relay, sid: myMailbox.sid });
+}
+
+async function addEpoch(chat: string, r: Ratchet, env: string) {
+  const st = asyncCache.get(chat) ?? { epochs: [] };
+  st.epochs = [{ ratchet: r.toJSON(), envKey: env, created: Date.now() }, ...st.epochs].slice(0, MAX_EPOCHS);
+  asyncCache.set(chat, st);
+  await R().saveAsync(chat, st);
+  publishOffline();
+}
+
+async function onRatchetInit(chat: string, m: AppMessage) {
+  const seed = seeds.get(chat);
+  if (!seed || seed.role !== 'initiator' || typeof m.pub !== 'string') return;
+  seeds.delete(chat);
+  const pub = fromB64u(m.pub);
+  if (pub.length !== 32) return;
+  const r = await Ratchet.initAlice(seed.sk, pub, seed.ad);
+  const hello = await r.encrypt(utf8('veil-ratchet-hello'));
+  wipe(seed.sk);
+  await asyncQueue(chat).run(() => addEpoch(chat, r, seed.env));
+  await sessions.get(chat)?.send({ t: 'ratchet-hello', m: toB64u(hello) });
+}
+
+async function onRatchetHello(chat: string, m: AppMessage) {
+  const seed = seeds.get(chat);
+  if (!seed || seed.role !== 'responder' || !seed.bob || typeof m.m !== 'string') return;
+  seeds.delete(chat);
+  const r = Ratchet.initBob(seed.sk, seed.bob, seed.ad);
+  const hello = fromUtf8(await r.decrypt(fromB64u(m.m)));
+  wipe(seed.sk);
+  if (hello !== 'veil-ratchet-hello') return;
+  await asyncQueue(chat).run(() => addEpoch(chat, r, seed.env));
+}
+
+async function onMailboxCard(chat: string, m: AppMessage) {
+  if (m.remove === true) {
+    await updateContact(chat, { mailbox: undefined });
+    return publishOffline();
+  }
+  if (typeof m.relay !== 'string' || typeof m.sid !== 'string' || !/^[A-Za-z0-9_-]{22}$/.test(m.sid)) return;
+  let relay: string;
+  try {
+    // A contact may only point us at a local relay when we run locally ourselves.
+    relay = normalizeRelayUrl(m.relay, isLocalApp());
+  } catch {
+    return;
+  }
+  await updateContact(chat, { mailbox: { relay, sid: m.sid } });
+  publishOffline();
+  void flushOutbox();
+}
+
+const isLocalApp = () => location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+
+async function announceMailbox() {
+  const card: AppMessage = myMailbox ? { t: 'mailbox', relay: myMailbox.relay, sid: myMailbox.sid } : { t: 'mailbox', remove: true };
+  for (const c of S().contacts) void sendApp(c.id, card).catch(() => {});
+}
+
+/** Creates our mailbox on a relay and tells contacts where to leave messages. */
+export async function setupMailbox(input: string) {
+  const relay = normalizeRelayUrl(input, true);
+  if (myMailbox) await removeMailbox();
+  const mb = await createMailbox(relay);
+  await R().saveMailbox(mb);
+  myMailbox = mb;
+  publishOffline();
+  await announceMailbox();
+}
+
+export async function removeMailbox() {
+  const mb = myMailbox;
+  if (!mb) return;
+  myMailbox = undefined;
+  await announceMailbox();
+  await deleteMailbox(mb).catch(() => {});
+  await R().saveMailbox(undefined);
+  publishOffline();
+}
+
+/** Registers (or removes) a Web Push subscription so the relay can wake this device. */
+export async function setMailboxPush(on: boolean) {
+  const mb = myMailbox;
+  if (!mb || !('serviceWorker' in navigator)) throw new Error('Push is not available here');
+  const reg = await navigator.serviceWorker.ready;
+  if (!reg.pushManager) throw new Error('This browser does not support push');
+  if (on) {
+    const info = await relayInfo(mb.relay);
+    let sub = await reg.pushManager.getSubscription();
+    const current = sub?.options.applicationServerKey ? toB64u(new Uint8Array(sub.options.applicationServerKey)) : undefined;
+    if (sub && current !== info.vapid) {
+      await sub.unsubscribe();
+      sub = null;
+    }
+    sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64u(info.vapid) });
+    await setPushEndpoint(mb, sub.endpoint);
+    mb.push = sub.endpoint;
+  } else {
+    await setPushEndpoint(mb, null).catch(() => {});
+    await (await reg.pushManager.getSubscription())?.unsubscribe();
+    mb.push = undefined;
+  }
+  await R().saveMailbox(mb);
+  publishOffline();
+}
+
+// The service worker asks us to check the mailbox when a push arrives while we are open.
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if ((e.data as { type?: string })?.type === 'veil-poll') void pollMailbox();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void pollMailbox();
+});
+addEventListener('online', () => {
+  void flushOutbox();
+  void pollMailbox();
+});

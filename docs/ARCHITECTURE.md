@@ -2,7 +2,7 @@
 
 ## Goals
 
-1. **No servers in the data path.** Messages, files and keys never touch infrastructure Veil operates. Veil operates none.
+1. **No servers required.** Live messages, files and keys go device to device. Veil operates no infrastructure. The only optional server is a user-chosen mailbox relay for offline messages, and it is designed to learn as little as possible (see below).
 2. **Defense in depth.** Do not rely on one layer (DTLS) alone. Authenticate everything. Fail closed.
 3. **Small, auditable crypto surface.** Every primitive goes through `app/src/crypto/primitives.ts`. Only WebCrypto and the audited `@noble` libraries are used.
 4. **Works everywhere a modern browser runs.** Installable PWA, offline app shell, responsive from 320 px phones to 4K.
@@ -114,6 +114,37 @@ chunks/<HMAC(file)>/<index>    sealed 1 MiB file block
 
 Every record has a fresh 96-bit IV and uses its slot name as AAD, so records cannot be swapped. Changing the passphrase re-wraps the master key without re-encrypting data. Locking (manual, idle timeout, or `pagehide`) closes sessions, drops all keys and revokes object URLs.
 
+## Offline messages
+
+```
+ Alice (offline-capable contact)                 Bob's mailbox relay                Bob
+ ─────────────────────────────                   ──────────────────                 ───
+ DR-encrypt(msg) → envelope (padded, no id) ──►  POST /v1/send/{sid}  ──empty push──►  service worker
+                                                 stores ciphertext                     "You have new messages"
+                                                 GET /v1/recv/{rid} (signed) ◄──────── Veil opens, fetches,
+                                                 ack → deleted                         trial-decrypts, DR-decrypts
+```
+
+**Setup (during any live session):**
+1. The handshake HKDF output is extended by 32 bytes: `asyncRoot`. This is prefix-compatible, so the existing chain keys are unchanged.
+2. Both sides derive `SK = HKDF(asyncRoot, "veil/v1/ratchet/sk")` and `envKey = HKDF(asyncRoot, "veil/v1/mailbox/env")`. `asyncRoot` is then wiped.
+3. The responder sends `ratchet-init { pub }` (a fresh X25519 ratchet key). The initiator runs `RatchetInitAlice(SK, pub)` and answers `ratchet-hello` with a ratchet message. The responder runs `RatchetInitBob`. Both now hold a Double Ratchet with associated data `veil/v1/ratchet/ad || id_I || id_R`.
+4. Each side that has a mailbox sends `mailbox { relay, sid }`.
+
+Every live session re-seeds a new **epoch**. The previous epoch is kept so mail already in flight still decrypts (2 epochs max).
+
+**Sending while the contact is offline:** `msg`, `receipt`, `profile`, `disappear` and `mailbox` messages are encrypted with the newest epoch's ratchet. The state is persisted *before* upload. The result is sealed in an envelope: `iv || AES-256-GCM(envKey, pad(len || dr_message))`, padded to 1/4/16/64 KiB buckets. If the relay is unreachable, the envelope waits in an encrypted outbox and is retried. Files, typing indicators and file control always need a live session.
+
+**Receiving:** Veil polls on unlock, every 30 s while visible, on `online`, and when a push arrives. Envelopes have no sender id, so each one is trial-decrypted against every contact's envelope keys (cheap AES-GCM), then decrypted by that contact's ratchet and acknowledged so the relay deletes it.
+
+**Properties:**
+- Content, sender identity, ratchet headers and counters are hidden from the relay. It sees an anonymous queue, padded sizes, timing and client IPs.
+- The ratchet root starts from the hybrid X25519 + ML-KEM-768 secret, so recorded offline traffic stays protected against a future quantum attacker. Per-message keys give forward secrecy, and DH ratchet steps give break-in recovery (classical). Each live session reseeds with fresh post-quantum material.
+- Ratchet state and mailbox credentials are **never** written to backups. Restoring an old ratchet would reuse keys. A restored device re-establishes offline messaging at the next live connection.
+- Peers can only point us at `https://` relays (no localhost unless the app itself runs locally), and the relay only accepts push endpoints from known push services, so neither side can be used for SSRF.
+
+**Relay design:** see [relay/README.md](../relay/README.md). It uses unlinkable `rid`/`sid` capabilities, Ed25519-signed owner requests with a 5-minute window, per-IP in-memory rate limits, quotas, a 30-day TTL, `secure_delete`, no logs, a non-root read-only container, and zero npm runtime dependencies.
+
 ## Encrypted backups
 
 A backup is one portable `.veilbackup` file (see `app/src/storage/backup.ts`):
@@ -152,7 +183,8 @@ Veil has no push server, and Web Push would need one: a server holding your push
 
 ## Web platform hardening
 
-- CSP (meta tag, since GitHub Pages cannot set headers): `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types veil-sw`.
+- CSP (meta tag, since GitHub Pages cannot set headers): `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types veil-sw`.
+- `connect-src` allows `https:` because users choose their own mailbox relay. Script execution stays locked to `'self'` with Trusted Types, so this does not widen what code can run.
 - One Trusted Types policy, which only allows the service worker URL `./sw.js`.
 - `referrer: no-referrer`. No external fonts, images or scripts.
 - The service worker caches only same-origin GET requests for the app shell. Navigation is network-first so updates land quickly.
@@ -166,6 +198,8 @@ Veil has no push server, and Web Push would need one: a server holding your push
 ## Roadmap ideas
 
 - Voice and video calls (renegotiated over the existing authenticated channel)
+- Offline file delivery through the mailbox (chunked, size-capped)
+- Post-quantum ratchet steps (SPQR-style ML-KEM ratchet) for post-compromise security against quantum attackers
 - Group chats (pairwise sessions or MLS)
 - Resumable transfers
 - Encrypted backup/export between your own devices

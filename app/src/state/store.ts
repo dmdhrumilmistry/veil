@@ -37,6 +37,11 @@ export interface AppState {
   elsewhere?: 'open' | 'taken';
   /** A new app version is installed and waiting for a reload. */
   updateReady?: boolean;
+  /** Contacts we can message while they are offline (mailbox + ratchet ready). */
+  offline: Record<string, boolean>;
+  /** Our own mailbox, if set up. */
+  mailbox?: { relay: string; push: boolean };
+  mailboxError?: string;
 }
 
 type Listener = () => void;
@@ -54,6 +59,7 @@ class Store {
     connect: null,
     toasts: [],
     progress: {},
+    offline: {},
     view: 'chats',
   };
   private listeners = new Set<Listener>();

@@ -33,6 +33,12 @@ const paths: Record<string, JSX.Element> = {
     </>
   ),
   down: <path d="M12 5v14M6 13l6 6 6-6" />,
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <path d="m4 7 8 6 8-6" />
+    </>
+  ),
   sun: (
     <>
       <circle cx="12" cy="12" r="4" />

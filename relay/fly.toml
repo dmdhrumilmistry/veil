@@ -1,0 +1,27 @@
+# Deploy to Fly.io (free allowance covers a personal relay):
+#   fly launch --copy-config --no-deploy && fly volumes create relay_data --size 1 && fly deploy
+app = "veil-relay"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  VEIL_RELAY_TRUST_PROXY = "1"
+
+[[mounts]]
+  source = "relay_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "3s"

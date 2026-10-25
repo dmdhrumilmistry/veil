@@ -1,9 +1,12 @@
 import { concat, fromB64u, toB64u } from '../crypto/encoding';
 import { generateIdentity, importIdentityPrivate, type Identity } from '../crypto/identity';
 import * as idb from './idb';
+import type { RatchetJSON } from '../crypto/ratchet';
+import type { MyMailbox } from '../net/mailbox';
 import type { Vault } from './vault';
 
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+/** `queued`: waiting in the recipient's mailbox relay (they were offline). */
+export type MessageStatus = 'sending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
 export type FileState = 'offered' | 'transferring' | 'done' | 'failed' | 'declined' | 'canceled' | 'removed';
 
 export interface FileMeta {
@@ -45,6 +48,8 @@ export interface Contact {
   unread: number;
   /** Last message summary for the chat list (stored encrypted like everything else). */
   preview?: MessagePreview;
+  /** Where to leave messages for this contact while they are offline (their relay). */
+  mailbox?: { relay: string; sid: string };
 }
 
 export interface MessagePreview {
@@ -94,6 +99,28 @@ export interface Profile {
 export interface StoredIdentity {
   pub: string;
   pkcs8: string;
+}
+
+/** One Double Ratchet epoch: re-seeded at every live connection, newest first. */
+export interface AsyncEpoch {
+  ratchet: RatchetJSON;
+  envKey: string;
+  created: number;
+}
+
+export interface AsyncState {
+  epochs: AsyncEpoch[];
+}
+
+/** A sealed envelope waiting to be uploaded (relay unreachable at send time). */
+export interface OutboxItem {
+  id: string;
+  chat: string;
+  msgId?: string;
+  relay: string;
+  sid: string;
+  envelope: string;
+  tries: number;
 }
 
 export const CHUNK_STORE_SIZE = 1024 * 1024; // files are persisted in 1 MiB sealed chunks
@@ -147,6 +174,45 @@ export class Repo {
     return this.vault.putJson('kv', 'settings', s);
   }
 
+  // ---- offline messaging (never included in backups: ratchet state must not be rolled back) ----
+
+  getMailbox() {
+    return this.vault.getJson<MyMailbox>('kv', 'mailbox');
+  }
+
+  async saveMailbox(mb: MyMailbox | undefined) {
+    if (mb) await this.vault.putJson('kv', 'mailbox', mb);
+    else await idb.del('kv', 'mailbox');
+  }
+
+  private async asyncSlot(id: string) {
+    return `async/${await this.vault.tag(`async:${id}`)}`;
+  }
+
+  async getAsync(id: string) {
+    return this.vault.getJson<AsyncState>('kv', await this.asyncSlot(id));
+  }
+
+  async saveAsync(id: string, s: AsyncState) {
+    await this.vault.putJson('kv', await this.asyncSlot(id), s);
+  }
+
+  async deleteAsync(id: string) {
+    await idb.del('kv', await this.asyncSlot(id));
+  }
+
+  async listOutbox(): Promise<OutboxItem[]> {
+    return (await this.vault.listJson<OutboxItem>('kv', 'outbox/')).map(([, o]) => o);
+  }
+
+  async saveOutbox(o: OutboxItem) {
+    await this.vault.putJson('kv', `outbox/${o.id}`, o);
+  }
+
+  async deleteOutbox(id: string) {
+    await idb.del('kv', `outbox/${id}`);
+  }
+
   // ---- contacts ----
 
   private async contactSlot(id: string) {
@@ -163,6 +229,7 @@ export class Repo {
 
   async deleteContact(id: string) {
     await this.clearChat(id);
+    await this.deleteAsync(id);
     await idb.del('kv', await this.contactSlot(id));
   }
 
