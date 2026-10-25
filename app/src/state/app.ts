@@ -9,6 +9,7 @@ import * as idb from '../storage/idb';
 import { BackupWriter, readBackup } from '../storage/backup';
 import { CHUNK_STORE_SIZE, DEFAULT_SETTINGS, Repo, type Contact, type FileMeta, type Message, type MessagePreview, type Settings, type StoredIdentity } from '../storage/repo';
 import { Vault } from '../storage/vault';
+import { claimInstance, heldElsewhere, onInstanceLost } from './instance';
 import { clearNotifications, notify, onNotificationOpen, resetNotifications } from './notify';
 import { store, toast, type AppState } from './store';
 
@@ -82,7 +83,30 @@ export async function boot() {
     if (S().phase === 'ready') void openCode(c);
     else pendingCode = c;
   });
-  store.set({ phase: (await Vault.exists()) ? 'locked' : 'onboarding' });
+  const exists = await Vault.exists();
+  if (exists && (await heldElsewhere())) return store.set({ phase: 'elsewhere', elsewhere: 'open' });
+  store.set({ phase: exists ? 'locked' : 'onboarding' });
+}
+
+/** Another window took over: step aside without touching stored data. */
+onInstanceLost(() => {
+  teardown();
+  clearTimeout(lockTimer);
+  clearInterval(sweepTimer);
+  store.set({ phase: 'elsewhere', elsewhere: 'taken' });
+});
+
+/** Make this window the active one (the other window locks itself). */
+export async function useHere() {
+  await claimInstance(true);
+  store.set({ phase: (await Vault.exists()) ? 'locked' : 'onboarding', elsewhere: undefined });
+}
+
+async function ensureActive() {
+  if (!(await claimInstance())) {
+    store.set({ phase: 'elsewhere', elsewhere: 'open' });
+    throw new Error('Veil is open in another window');
+  }
 }
 
 let pendingCode: string | undefined;
@@ -94,6 +118,7 @@ function takeCodeFromUrl(): string | undefined {
 }
 
 export async function createAccount(name: string, passphrase: string) {
+  await ensureActive();
   const vault = await Vault.create(passphrase);
   repo = new Repo(vault);
   identity = await repo.createIdentity();
@@ -103,6 +128,7 @@ export async function createAccount(name: string, passphrase: string) {
 }
 
 export async function unlock(passphrase: string) {
+  await ensureActive();
   const vault = await Vault.unlock(passphrase);
   repo = new Repo(vault);
   identity = await repo.loadIdentity();
@@ -1017,6 +1043,8 @@ export async function restoreBackup(file: Blob, backupPass: string, devicePass: 
     store.set({ restoring: p });
   };
   const back = S().phase;
+  // Restoring replaces the shared database, so any other window must stand down.
+  await claimInstance(true);
   store.set({ phase: 'restoring' });
   try {
     await inspectBackup(file, backupPass, report);

@@ -132,6 +132,12 @@ types     = 0x01 JSON entry { k, d } | 0x02 file chunk (fileId, index, bytes) | 
 - **Restore** first decrypts and authenticates the whole file without writing anything, then shows a summary. Only after the user confirms does it wipe the device, create a new vault (with the backup passphrase or a new one), and re-encrypt every record under fresh device keys. If anything fails midway, the partial data is wiped. In-flight transfers come back as failed.
 - Restore is offered on first launch, on the lock screen ("Forgot passphrase?") and in Settings.
 
+## Windows, installed app and updates
+
+- **Shared storage (Android, desktop):** the installed app and browser tabs on the same origin share one IndexedDB. Each window keeps decrypted state and live WebRTC sessions in memory, so only **one window is active at a time**, enforced with the Web Locks API (`app/src/state/instance.ts`). A second window shows "Veil is open in another window - Use Veil here". Taking over `steal`s the lock, and the previous window tears down its sessions and keys. Neither window ever runs on a stale copy of the data.
+- **Separate storage (iOS/iPadOS):** Home Screen apps get storage isolated from Safari, so they are independent installations with different identities. Data moves between them with an encrypted backup and restore. The app explains this on iOS during install and first run.
+- **Updates:** the service worker is versioned per build. Open windows check for a new version hourly and whenever they become visible. If an update lands during a conversation, a "Reload" banner appears instead of interrupting. Otherwise the app reloads itself.
+
 ## Notifications
 
 Veil has no push server, and Web Push would need one: a server holding your push subscription and waking your device, which reveals when you get messages. So notifications are **local**. The running app raises them when a message, file or new connection arrives on a live session while Veil is not in front. That covers the cases that matter: if Veil is fully closed there is no connection, so nobody can message you.

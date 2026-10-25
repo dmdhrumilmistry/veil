@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks';
-import { createAccount, unlock, wipeEverything } from '../state/app';
+import { createAccount, unlock, useHere, wipeEverything } from '../state/app';
+import { detectPlatform, isStandalone } from '../state/install';
 import { useApp } from '../state/store';
 import { WrongPassphraseError } from '../storage/vault';
 import { Icon, Logo } from './icons';
@@ -64,6 +65,14 @@ export function Onboarding() {
           <button class="btn ghost" onClick={() => setStep(2)}>
             <Icon name="download" size={18} /> Restore from a backup
           </button>
+          {detectPlatform() === 'ios' && isStandalone() && (
+            <div class="callout info">
+              <Icon name="info" size={18} />
+              <span>
+                <b>Used Veil in Safari before?</b> On iPhone and iPad, the Home Screen app keeps its own separate data. In Safari, open Settings, create a backup, then choose "Restore from a backup" here.
+              </span>
+            </div>
+          )}
           <InstallCard compact />
         </div>
       </main>
@@ -210,6 +219,28 @@ export function Handoff() {
         <div class="success-ring"><Icon name="check" size={36} /></div>
         <h1>Reply delivered</h1>
         <p class="muted">{handoffMessage}</p>
+      </div>
+    </main>
+  );
+}
+
+export function Elsewhere() {
+  const { elsewhere } = useApp();
+  const [busy, setBusy] = useState(false);
+  return (
+    <main class="gate">
+      <div class="gate-card narrow">
+        <div class="lock-badge"><Icon name="copy" size={36} /></div>
+        <h1>{elsewhere === 'taken' ? 'Veil moved to another window' : 'Veil is open in another window'}</h1>
+        <p class="muted">
+          {elsewhere === 'taken'
+            ? 'You opened Veil somewhere else, so this window stepped aside. Your chats are safe.'
+            : 'Veil runs in one window at a time so your chats and connections stay in sync.'}
+        </p>
+        <button class="btn primary lg" disabled={busy} onClick={() => { setBusy(true); void useHere().finally(() => setBusy(false)); }}>
+          Use Veil here
+        </button>
+        <p class="fine">The other window will lock and disconnect.</p>
       </div>
     </main>
   );

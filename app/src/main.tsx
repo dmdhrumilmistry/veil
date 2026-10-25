@@ -28,6 +28,23 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
     },
   });
   addEventListener('load', () => {
-    navigator.serviceWorker.register(policy ? policy.createScriptURL('./sw.js') : './sw.js', { scope: './' }).catch(() => {});
+    navigator.serviceWorker
+      .register(policy ? policy.createScriptURL('./sw.js') : './sw.js', { scope: './' })
+      .then((reg) => {
+        // Installed apps can stay open for days: look for new versions regularly.
+        const check = () => void reg.update().catch(() => {});
+        setInterval(check, 60 * 60_000);
+        document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && check());
+      })
+      .catch(() => {});
+  });
+
+  // A new worker took control: the code on screen is outdated. Reload right away unless
+  // the user is mid-conversation, in which case offer a reload instead of interrupting.
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return; // first install, not an update
+    if (store.state.phase === 'ready') store.set({ updateReady: true });
+    else location.reload();
   });
 }

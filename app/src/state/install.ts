@@ -60,7 +60,12 @@ export function detectPlatform(ua = navigator.userAgent): Platform {
 export function installSteps(p: Platform): string[] | undefined {
   switch (p) {
     case 'ios':
-      return ['Open this page in Safari', 'Tap the Share button', 'Choose "Add to Home Screen", then "Add"'];
+      return [
+        'Open this page in Safari',
+        'Tap the Share button',
+        'Choose "Add to Home Screen", then "Add"',
+        'Note: on iPhone the Home Screen app keeps separate data from Safari. Install before you start, or move your chats with Backup & restore.',
+      ];
     case 'android-firefox':
       return ['Tap the menu (three dots)', 'Choose "Add app to Home screen"', 'Confirm with "Add"'];
     case 'android-samsung':

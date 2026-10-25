@@ -3,7 +3,7 @@ import { useApp } from '../state/store';
 import { RestoringScreen } from './Backup';
 import { Chat } from './Chat';
 import { ConnectSheet } from './ConnectSheet';
-import { Handoff, LockScreen, Onboarding, Unsupported } from './Gate';
+import { Elsewhere, Handoff, LockScreen, Onboarding, Unsupported } from './Gate';
 import { Icon, Logo } from './icons';
 import { ContactInfo, SettingsPanel } from './Panels';
 import { Sidebar } from './Sidebar';
@@ -43,6 +43,18 @@ function Welcome() {
   );
 }
 
+function UpdateBanner() {
+  const { updateReady } = useApp();
+  if (!updateReady) return null;
+  return (
+    <div class="update-banner" role="status">
+      <Icon name="download" size={16} />
+      <span>A new version of Veil is ready.</span>
+      <button class="btn primary sm" onClick={() => location.reload()}>Reload</button>
+    </div>
+  );
+}
+
 function Main() {
   const { contacts, activeChat, view } = useApp();
   const contact = contacts.find((c) => c.id === activeChat);
@@ -57,6 +69,7 @@ function Main() {
       <Sidebar />
       <main class="pane" id="main">{pane}</main>
       <ConnectSheet />
+      <UpdateBanner />
     </div>
   );
 }
@@ -71,6 +84,7 @@ export function App() {
       {phase === 'locked' && <LockScreen />}
       {phase === 'handoff' && <Handoff />}
       {phase === 'restoring' && <RestoringScreen />}
+      {phase === 'elsewhere' && <Elsewhere />}
       {phase === 'ready' && <Main />}
       <Toasts />
     </>

@@ -220,6 +220,23 @@ try {
   console.log('restore onto new device ok (identity, contacts, messages, files)');
   await shot(carol, 'restored-desktop.png');
 
+  // Single active window: a second tab in the same browser (shared storage) must not
+  // run alongside the first; taking over moves Veil cleanly.
+  const alice2 = await alice.context().newPage();
+  await alice2.goto(BASE);
+  await alice2.getByRole('heading', { name: 'Veil is open in another window' }).waitFor();
+  await alice2.getByRole('button', { name: 'Use Veil here' }).click();
+  await alice.getByRole('heading', { name: 'Veil moved to another window' }).waitFor({ timeout: 10000 });
+  await alice2.getByPlaceholder('Passphrase').fill(PASS);
+  await alice2.getByRole('button', { name: 'Unlock' }).click();
+  await alice2.getByRole('button', { name: /Bob/ }).first().waitFor();
+  await shot(alice, 'elsewhere.png');
+  // ...and back again.
+  await alice.getByRole('button', { name: 'Use Veil here' }).click();
+  await alice2.getByRole('heading', { name: 'Veil moved to another window' }).waitFor({ timeout: 10000 });
+  await alice.getByRole('heading', { name: 'Veil is locked' }).waitFor();
+  console.log('single active window handover ok');
+
   // Data at rest must not contain plaintext.
   const leaked = await alice.evaluate(async () => {
     const db = await new Promise((r) => { const q = indexedDB.open('veil'); q.onsuccess = () => r(q.result); });

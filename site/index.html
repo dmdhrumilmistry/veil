@@ -545,6 +545,10 @@
           <p>Your local data is encrypted under a key that only your passphrase can unlock, and there is no account or server that could reset it. That is why Veil offers encrypted backups: create one in Settings, keep the file somewhere safe, and you can restore your identity, contacts and chats on any device - even if you forget your device passphrase.</p>
         </details>
         <details class="reveal">
+          <summary>Why doesn't the app on my iPhone show my Safari chats?</summary>
+          <p>On iPhone and iPad, apps added to the Home Screen get their own storage, completely separate from Safari, so they act as two different installations. Install Veil before you start chatting, or move your data: in Safari open Settings, create a backup, then choose "Restore from a backup" in the Home Screen app. On Android and desktop, the installed app and the browser share the same data, and Veil runs in one window at a time to keep it in sync.</p>
+        </details>
+        <details class="reveal">
           <summary>How do backups work without a cloud?</summary>
           <p>Veil writes a single <b>.veilbackup</b> file that you keep wherever you like - a USB drive, your own cloud storage, another computer. It is encrypted with AES-256-GCM under a backup passphrase (PBKDF2-SHA-256, 600,000 iterations) and sealed record by record, so tampering or a half-copied file is detected before anything is restored. Photos and files are optional. Nobody can open it without the backup passphrase.</p>
         </details>

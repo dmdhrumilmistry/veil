@@ -2219,3 +2219,34 @@ dialog.lightbox img {
 .stack.center {
   justify-items: center;
 }
+
+/* Update banner & info callout */
+.update-banner {
+  position: fixed;
+  top: calc(12px + var(--safe-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  white-space: nowrap;
+  animation: rise 0.25s var(--ease);
+}
+.update-banner .icon {
+  color: var(--primary-2);
+}
+.callout.info {
+  background: rgb(34 211 238 / 0.08);
+  border: 1px solid rgb(34 211 238 / 0.25);
+}
+.callout.info .icon {
+  color: var(--primary-2);
+  flex: none;
+}
