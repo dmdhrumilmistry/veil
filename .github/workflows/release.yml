@@ -4,6 +4,8 @@ name: Release
 #   1. verify, test (unit + two-browser E2E) and build the app
 #   2. publish a GitHub Release with zipped builds, SHA-256 checksums and signed build provenance
 #   3. deploy the website (/) and app (/app/) to GitHub Pages (skipped for pre-releases like v1.0.0-rc.1)
+#   4. build the Flutter Android app (APK attached to the release; signed with the release key
+#      when ANDROID_KEYSTORE_* secrets are set, otherwise with a throwaway debug key)
 
 on:
   push:
@@ -97,8 +99,57 @@ jobs:
         with:
           path: _site
 
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+          cache: true
+      - name: Test protocol core
+        working-directory: flutter/veil_core
+        run: |
+          dart pub get
+          dart test
+      - name: Configure release signing (optional)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$RUNNER_TEMP/release.jks" "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > flutter/app/android/key.properties
+            echo "Signing with the release key"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: the APK is signed with a debug key (fine for testing, not for store releases)"
+          fi
+      - name: Build APK
+        working-directory: flutter/app
+        run: |
+          flutter pub get
+          flutter test
+          flutter build apk --release --build-name "${GITHUB_REF_NAME#v}"
+          cp build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/veil-android-${GITHUB_REF_NAME}.apk"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android
+          path: ${{ runner.temp }}/veil-android-*.apk
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -107,6 +158,12 @@ jobs:
         with:
           name: release-files
           path: release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android
+          path: release
+      - name: Checksum the APK too
+        run: cd release && sha256sum *.apk >> SHA256SUMS.txt
 
       - name: Create GitHub Release
         env:
@@ -120,6 +177,8 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
           cat > notes.md <<NOTES
           **Use it:** https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/app/
+
+          **Android:** install \`veil-android-$TAG.apk\` (allow installs from your browser or file manager).
 
           **Self-host:** unzip \`veil-app-$TAG.zip\` and serve it over HTTPS from any static host.
 
