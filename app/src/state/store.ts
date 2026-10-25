@@ -5,8 +5,32 @@ import { DEFAULT_SETTINGS } from '../storage/repo';
 export type Phase = 'loading' | 'unsupported' | 'onboarding' | 'locked' | 'ready' | 'handoff' | 'restoring' | 'elsewhere';
 
 export type ConnectFlow =
-  | { mode: 'invite'; step: 'creating' | 'waiting' | 'connecting' | 'error'; code?: string; link?: string; error?: string; forContact?: string }
-  | { mode: 'join'; step: 'input' | 'creating' | 'waiting' | 'connecting' | 'error'; code?: string; link?: string; error?: string; peerName?: string };
+  | {
+      mode: 'invite';
+      /** `link`: a long-lived invite link (needs a mailbox). Others: the live one-time code flow. */
+      step: 'creating' | 'link' | 'waiting' | 'connecting' | 'error';
+      code?: string;
+      link?: string;
+      error?: string;
+      forContact?: string;
+      expires?: number;
+    }
+  | {
+      mode: 'join';
+      /** `confirm`: reviewing an invite link; `requested`: join sent, waiting for them. */
+      step: 'input' | 'creating' | 'waiting' | 'connecting' | 'error' | 'confirm' | 'requested';
+      code?: string;
+      link?: string;
+      error?: string;
+      peerName?: string;
+    };
+
+export interface InviteSummary {
+  iid: string;
+  created: number;
+  expires: number;
+  claimed: boolean;
+}
 
 export interface Toast {
   id: number;
@@ -42,6 +66,8 @@ export interface AppState {
   /** Our own mailbox, if set up. */
   mailbox?: { relay: string; push: boolean };
   mailboxError?: string;
+  /** Active invite links we created. */
+  invites: InviteSummary[];
 }
 
 type Listener = () => void;
@@ -60,6 +86,7 @@ class Store {
     toasts: [],
     progress: {},
     offline: {},
+    invites: [],
     view: 'chats',
   };
   private listeners = new Set<Listener>();

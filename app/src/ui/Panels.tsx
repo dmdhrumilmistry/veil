@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'preact/hooks';
 import { peerPub, safetyNumber, formatSafetyNumber } from '../crypto/identity';
 import {
+  revokeInvite,
   changePassphrase,
   clearChat,
   deleteContact,
@@ -201,6 +202,41 @@ function NotificationsCard() {
   );
 }
 
+function InvitesCard() {
+  const { invites, settings, mailbox } = useApp();
+  if (!mailbox) return null;
+  const left = (t: number) => {
+    const d = Math.ceil((t - Date.now()) / 86_400_000);
+    return d <= 1 ? 'expires within a day' : `expires in ${d} days`;
+  };
+  return (
+    <div class="card">
+      <CardHead icon="link" title="Invite links" sub="Single-use links that connect automatically - no codes to send back." />
+      <div class="field">
+        <label for="set-invdays">New links work for</label>
+        <select id="set-invdays" value={settings.inviteDays} onChange={(e) => void saveSettings({ inviteDays: Number(e.currentTarget.value) })}>
+          {[1, 3, 7, 14, 30].map((d) => <option value={d}>{d} day{d > 1 ? 's' : ''}</option>)}
+        </select>
+      </div>
+      {invites.length === 0 ? (
+        <p class="muted small">No active invite links.</p>
+      ) : (
+        <ul class="invite-list">
+          {invites.map((i) => (
+            <li>
+              <span class="grow">
+                <b>{i.claimed ? 'Opened - connecting when you are both online' : 'Waiting to be opened'}</b>
+                <small class="muted">Created {new Date(i.created).toLocaleDateString()} - {left(i.expires)}</small>
+              </span>
+              <button class="btn ghost sm danger-text" onClick={() => void revokeInvite(i.iid).then(() => toast('Invite revoked', 'success'))}>Revoke</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function CardHead({ icon, title, sub }: { icon: IconName; title: string; sub?: string }) {
   return (
     <div class="card-head">
@@ -263,6 +299,8 @@ export function SettingsPanel() {
 
         <MailboxCard />
 
+        <InvitesCard />
+
         <NotificationsCard />
 
         <InstallCard />
@@ -275,6 +313,10 @@ export function SettingsPanel() {
               {[1, 5, 15, 60, 240, 0].map((v) => <option value={v}>{v === 0 ? 'Never' : v < 60 ? `${v} minutes` : `${v / 60} hour${v > 60 ? 's' : ''}`}</option>)}
             </select>
           </div>
+          <label class="toggle">
+            <input type="checkbox" checked={settings.autoConnect} onChange={(e) => void saveSettings({ autoConnect: e.currentTarget.checked })} />
+            <span>Connect automatically <small class="muted">(when you open a chat, and when contacts reach out - they can tell you are online)</small></span>
+          </label>
           <ChangePassphrase />
           <button class="btn ghost" onClick={() => lock()}><Icon name="lock" size={18} /> Lock now</button>
         </div>

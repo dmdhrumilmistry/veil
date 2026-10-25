@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { createAccount, unlock, useHere, wipeEverything } from '../state/app';
+import { createAccount, DEFAULT_RELAY, unlock, useHere, wipeEverything } from '../state/app';
 import { detectPlatform, isStandalone } from '../state/install';
 import { useApp } from '../state/store';
 import { WrongPassphraseError } from '../storage/vault';
@@ -16,6 +16,7 @@ export function Onboarding() {
   const [pass, setPass] = useState('');
   const [confirm, setConfirm] = useState('');
   const [show, setShow] = useState(false);
+  const [useRelay, setUseRelay] = useState(!!DEFAULT_RELAY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const st = strength(pass);
@@ -27,7 +28,7 @@ export function Onboarding() {
     setBusy(true);
     setError('');
     try {
-      await createAccount(name, pass);
+      await createAccount(name, pass, useRelay ? DEFAULT_RELAY : undefined);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -109,6 +110,15 @@ export function Onboarding() {
           <input id="ob-confirm" type={show ? 'text' : 'password'} value={confirm} autoComplete="new-password" required onInput={(e) => setConfirm(e.currentTarget.value)} />
           {confirm && confirm !== pass && <small class="err">Passphrases do not match</small>}
         </div>
+
+        {DEFAULT_RELAY && (
+          <label class="toggle">
+            <input type="checkbox" checked={useRelay} onChange={(e) => setUseRelay(e.currentTarget.checked)} />
+            <span>
+              Easy invite links and offline messages via {new URL(DEFAULT_RELAY).host} <small class="muted">(the relay only ever sees encrypted data)</small>
+            </span>
+          </label>
+        )}
 
         <div class="callout warn">
           <Icon name="alert" size={18} />

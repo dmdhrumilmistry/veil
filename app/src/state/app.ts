@@ -1,16 +1,18 @@
 import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
 import { concat, fromB64u, fromUtf8, randomId, toB64u, toHex, utf8, wipe } from '../crypto/encoding';
 import { generateRatchetKey, Ratchet, type DhKeyPair } from '../crypto/ratchet';
+import { createInviteSecret, decodeInvite, encodeInvite, extractInvite, openJoin, sealJoin, type InviteSecret, type InviteV2, type JoinNote } from '../net/invite';
 import { ackMail, createMailbox, deleteMailbox, fetchMail, normalizeRelayUrl, openEnvelope, postToMailbox, relayInfo, RelayError, sealEnvelope, setPushEndpoint, type MyMailbox } from '../net/mailbox';
 import { peerId, peerPub, samePub, type Identity } from '../crypto/identity';
 import { aesKey, cryptoSupported, hkdf } from '../crypto/primitives';
 import { acceptAnswer, acceptOffer, createPeer, makeOffer, type PeerLink } from '../net/peer';
+import type { InviteSummary } from './store';
 import { Session, type AppMessage } from '../net/session';
 import { SerialQueue } from '../crypto/chain';
 import { decodeSignal, encodeSignal, extractCode, signalLink } from '../net/signaling';
 import * as idb from '../storage/idb';
 import { BackupWriter, readBackup } from '../storage/backup';
-import { CHUNK_STORE_SIZE, DEFAULT_SETTINGS, Repo, type Contact, type FileMeta, type Message, type AsyncState, type MessagePreview, type Settings, type StoredIdentity } from '../storage/repo';
+import { CHUNK_STORE_SIZE, DEFAULT_SETTINGS, Repo, type Contact, type FileMeta, type Message, type AsyncState, type ChannelRecord, type MessagePreview, type Settings, type StoredIdentity } from '../storage/repo';
 import { Vault } from '../storage/vault';
 import { claimInstance, heldElsewhere, onInstanceLost } from './instance';
 import { clearNotifications, notify, onNotificationOpen, resetNotifications } from './notify';
@@ -77,7 +79,7 @@ export async function boot() {
     store.set({ phase: 'unsupported' });
     return;
   }
-  if (code?.startsWith('VEIL1A') && (await handOffAnswer(code))) return;
+  if ((code?.startsWith('VEIL1A') || code?.startsWith('VEIL2I')) && (await handOffAnswer(code))) return;
   if (code) pendingCode = code;
   listenForHandoffs();
   addEventListener('hashchange', () => {
@@ -115,12 +117,13 @@ async function ensureActive() {
 let pendingCode: string | undefined;
 
 function takeCodeFromUrl(): string | undefined {
-  const code = extractCode(decodeURIComponent(location.hash));
+  const hash = decodeURIComponent(location.hash);
+  const code = extractInvite(hash) ?? extractCode(hash);
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   return code;
 }
 
-export async function createAccount(name: string, passphrase: string) {
+export async function createAccount(name: string, passphrase: string, relay?: string) {
   await ensureActive();
   const vault = await Vault.create(passphrase);
   repo = new Repo(vault);
@@ -128,6 +131,7 @@ export async function createAccount(name: string, passphrase: string) {
   await repo.saveProfile({ name: name.trim().slice(0, MAX_NAME) });
   await idb.requestPersistence();
   await enter();
+  if (relay) await setupMailbox(relay).catch((e) => toast(`Mailbox not set up: ${(e as Error).message}`, 'error', 6000));
 }
 
 export async function unlock(passphrase: string) {
@@ -196,7 +200,13 @@ export async function changePassphrase(oldPass: string, newPass: string) {
 function armAutoLock() {
   clearTimeout(lockTimer);
   const mins = S().settings.autoLockMins;
-  if (S().phase === 'ready' && mins > 0) lockTimer = setTimeout(() => lock('Locked after inactivity'), mins * 60_000);
+  if (S().phase === 'ready' && mins > 0) {
+    lockTimer = setTimeout(() => {
+      // Never lock (and drop the connection) while someone is waiting to connect.
+      if (connecting()) return armAutoLock();
+      lock('Locked after inactivity');
+    }, mins * 60_000);
+  }
 }
 
 export function activity() {
@@ -287,6 +297,9 @@ export async function openChat(id: string | undefined) {
     store.set((s) => ({ messages: { ...s.messages, [id]: msgs } }));
   }
   await markRead(id);
+  if (S().settings.autoConnect && !sessions.get(id)?.isReady && canMail(id) && Date.now() - (lastKnock.get(id) ?? 0) > 5 * 60_000) {
+    void connectContact(id, true);
+  }
 }
 
 export async function markRead(id: string) {
@@ -430,6 +443,8 @@ async function onAppMessage(chat: string, m: AppMessage, via: 'live' | 'mailbox'
       return onRatchetInit(chat, m);
     case 'ratchet-hello':
       return onRatchetHello(chat, m);
+    case 'rtc':
+      return handleRtc(chat, { kind: 'contact' }, m, displayName(contact(chat) ?? ({} as Contact)));
     case 'profile': {
       const name = str(m.name, MAX_NAME);
       if (name !== undefined) await updateContact(chat, { name });
@@ -777,6 +792,7 @@ async function failTransfers(chat: string) {
 // ------------------------------------------------------------------ connecting
 
 export function closeConnect() {
+  releaseWakeLock();
   if (pending && !pending.session?.isReady) pending.link.pc.close();
   pending = undefined;
   store.set({ connect: null });
@@ -800,6 +816,7 @@ function sessionEvents(p: Pending) {
     chunk: (fileId: string, index: number, data: Uint8Array) => (chat ? onChunk(chat, fileId, index, data) : undefined),
     drain: () => {},
     closed: (reason: string) => {
+      for (const [k, a] of attempts) if (a.link === p.link) attempts.delete(k);
       if (pending === p) {
         pending = undefined;
         const c = S().connect;
@@ -834,6 +851,7 @@ async function onReady(p: Pending, peer: Uint8Array, asyncRoot: Uint8Array): Pro
   store.set((s) => ({ presence: { ...s.presence, [id]: 'online' }, connect: null }));
   void p.session!.send({ t: 'profile', name: S().profile.name }).catch(() => {});
   await startAsync(p, id, peer, asyncRoot).catch((e) => console.warn('[veil] offline setup failed:', e));
+  void onConnected(id);
   void flushOutbox();
   if (!existing) await addSystemNote(id, 'Connected. Compare safety numbers to verify this contact.');
   toast(`Securely connected to ${displayName(c)}`, 'success');
@@ -842,7 +860,9 @@ async function onReady(p: Pending, peer: Uint8Array, asyncRoot: Uint8Array): Pro
   return id;
 }
 
-export async function createInvite(forContact?: string) {
+export async function createInvite(forContact?: string, liveCode = false): Promise<void> {
+  if (forContact && canMail(forContact) && !liveCode) return connectContact(forContact);
+  if (!forContact && myMailbox && !liveCode) return createInviteLink();
   closeConnect();
   store.set({ connect: { mode: 'invite', step: 'creating', forContact } });
   try {
@@ -853,6 +873,16 @@ export async function createInvite(forContact?: string) {
     if (pending?.ref !== ref) return;
     const code = await encodeSignal({ v: 1, k: 'offer', sdp, id: S().myId, name: S().profile.name, ref });
     store.set({ connect: { mode: 'invite', step: 'waiting', code, link: signalLink(code), forContact } });
+    void holdWakeLock();
+    // A live code only works while this screen stays open and the network path stays fresh.
+    const ref2 = ref;
+    setTimeout(() => {
+      const c = S().connect;
+      if (pending?.ref === ref2 && !pending.session && c?.mode === 'invite' && c.step === 'waiting') {
+        closeConnect();
+        store.set({ connect: { mode: 'invite', step: 'error', forContact, error: 'This code has expired. Codes only work for about 15 minutes while this screen stays open - create a fresh one, or set up a mailbox for links that last days.' } });
+      }
+    }, 15 * 60_000);
   } catch (err) {
     store.set({ connect: { mode: 'invite', step: 'error', error: (err as Error).message } });
   }
@@ -865,6 +895,7 @@ export function startJoin() {
 
 /** Handles any pasted/scanned/linked code: offers start a join, answers complete an invite. */
 export async function openCode(text: string) {
+  if (extractInvite(text)) return previewInvite(text);
   try {
     const sig = await decodeSignal(text);
     if (sig.k === 'answer') return submitAnswer(text);
@@ -931,7 +962,7 @@ async function handOffAnswer(code: string): Promise<boolean> {
     bc.postMessage({ type: 'answer', code });
   });
   bc.close();
-  if (acked) store.set({ phase: 'handoff', handoffMessage: 'Reply delivered to your open Veil tab. You can close this tab.' });
+  if (acked) store.set({ phase: 'handoff', handoffMessage: code.startsWith('VEIL2I') ? 'Invite opened in your other Veil window. You can close this tab.' : 'Reply delivered to your open Veil tab. You can close this tab.' });
   return acked;
 }
 
@@ -940,6 +971,13 @@ function listenForHandoffs() {
   const bc = new BroadcastChannel(SIGNAL_CHANNEL);
   bc.onmessage = (e) => {
     const data = e.data as { type?: string; code?: unknown };
+    // An invite link opened in a new tab: the active, unlocked window takes it.
+    if (data?.type === 'answer' && typeof data.code === 'string' && data.code.startsWith('VEIL2I') && S().phase === 'ready') {
+      bc.postMessage({ type: 'ack' });
+      void openCode(data.code);
+      window.focus();
+      return;
+    }
     if (data?.type !== 'answer' || typeof data.code !== 'string' || !pending || pending.role !== 'initiator') return;
     void decodeSignal(data.code)
       .then((sig) => {
@@ -1116,7 +1154,7 @@ export async function restoreBackup(file: Blob, backupPass: string, devicePass: 
 // ------------------------------------------------------------------ offline messages (mailbox relay + Double Ratchet)
 
 /** Message types that may arrive through a mailbox. Everything else needs a live session. */
-const MAILBOX_TYPES = new Set(['msg', 'receipt', 'profile', 'disappear', 'mailbox']);
+const MAILBOX_TYPES = new Set(['msg', 'receipt', 'profile', 'disappear', 'mailbox', 'rtc']);
 const MAX_EPOCHS = 2;
 const POLL_MS = 30_000;
 
@@ -1162,6 +1200,23 @@ function publishOffline() {
 
 async function loadOffline() {
   myMailbox = await R().getMailbox();
+  const now = Date.now();
+  for (const inv of await R().listInvites()) {
+    if (inv.exp < now) await R().deleteInvite(inv.iid);
+    else invites.set(inv.iid, inv);
+  }
+  for (const ch of await R().listChannels()) {
+    if (ch.expires < now) await dropChannel(ch);
+    else channels.set(ch.iid, ch);
+  }
+  publishInvites();
+  boostTimer = setInterval(() => {
+    if (Date.now() < boostUntil) void pollMailbox();
+  }, BOOST_POLL_MS);
+  // Still waiting on an invite we accepted? Let the inviter know we are here.
+  for (const ch of channels.values()) {
+    if (ch.role === 'joiner' && !contact(ch.peerId)) void knock(ch.peerId, { kind: 'channel', iid: ch.iid }, ch.peerName);
+  }
   for (const c of S().contacts) {
     const st = await R().getAsync(c.id);
     if (st) asyncCache.set(c.id, st);
@@ -1177,6 +1232,13 @@ async function loadOffline() {
 
 function stopOffline() {
   clearInterval(pollTimer);
+  clearInterval(boostTimer);
+  for (const a of attempts.values()) a.link?.pc.close();
+  attempts.clear();
+  invites.clear();
+  channels.clear();
+  lastKnock.clear();
+  releaseWakeLock();
   for (const s of seeds.values()) wipe(s.sk);
   seeds.clear();
   asyncCache.clear();
@@ -1253,19 +1315,22 @@ async function flushOutbox() {
 
 /** Fetches, decrypts and acknowledges everything waiting in our mailbox. */
 export function pollMailbox(): Promise<void> {
-  if (!repo || !myMailbox) return Promise.resolve();
+  if (!repo) return Promise.resolve();
+  const queues = [...(myMailbox ? [myMailbox] : []), ...[...channels.values()].flatMap((c) => (c.queue ? [c.queue] : []))];
+  if (!queues.length) return Promise.resolve();
   polling ??= (async () => {
-    const mb = myMailbox!;
     try {
-      let after = 0;
-      for (;;) {
-        const { messages, more } = await fetchMail(mb, after);
-        for (const m of messages) {
-          await receiveEnvelope(m.body).catch((e) => console.warn('[veil] mailbox message dropped:', (e as Error).message));
-          after = m.id;
+      for (const mb of queues) {
+        let after = 0;
+        for (;;) {
+          const { messages, more } = await fetchMail(mb, after);
+          for (const m of messages) {
+            await receiveEnvelope(m.body).catch((e) => console.warn('[veil] mailbox message dropped:', (e as Error).message));
+            after = m.id;
+          }
+          if (messages.length) await ackMail(mb, after);
+          if (!more) break;
         }
-        if (messages.length) await ackMail(mb, after);
-        if (!more) break;
       }
       store.set({ mailboxError: undefined });
     } catch (err) {
@@ -1295,6 +1360,20 @@ async function receiveEnvelope(body: Uint8Array) {
       if (msg && typeof msg.t === 'string') await onAppMessage(chat, msg, 'mailbox');
       return;
     }
+  }
+  // Signaling for a pending invite connection.
+  for (const ch of channels.values()) {
+    const plain = await openEnvelope(await envKey(ch.key), body);
+    if (!plain) continue;
+    const m = JSON.parse(fromUtf8(plain)) as AppMessage;
+    if (m?.t === 'rtc') await handleRtc(ch.peerId, { kind: 'channel', iid: ch.iid }, m, ch.peerName);
+    return;
+  }
+  // Someone opened one of our invite links.
+  for (const inv of invites.values()) {
+    if (inv.exp < Date.now()) continue;
+    const joined = await openJoin(inv, body);
+    if (joined) return onJoin(inv, joined.note, joined.chan);
   }
 }
 
@@ -1433,3 +1512,325 @@ addEventListener('online', () => {
   void flushOutbox();
   void pollMailbox();
 });
+
+// ------------------------------------------------------------------ rendezvous: invite links & one-tap reconnect
+
+/**
+ * With a mailbox relay, WebRTC signaling no longer needs copy-pasted codes:
+ *
+ *   knock  "I would like to connect"           (from the side that wants to talk)
+ *   offer  SDP offer                           (from the side that receives a knock)
+ *   answer SDP answer                          (from the knocker)
+ *
+ * Between contacts these travel inside the Double Ratchet (authenticated as that
+ * contact). Before two people are contacts, they travel over an invite channel keyed by
+ * the invite link (see net/invite.ts). Either way the resulting live session still runs
+ * the full hybrid handshake, pinned to the expected identity.
+ *
+ * Glare (both knock or both offer at once) is resolved deterministically: the side
+ * with the smaller identity key becomes the offerer.
+ */
+
+type Transport = { kind: 'contact' } | { kind: 'channel'; iid: string };
+interface Attempt {
+  aid: string;
+  role: 'knocker' | 'offerer' | 'answerer';
+  link?: PeerLink;
+  started: number;
+}
+
+const KNOCK_TTL = 3 * 60_000;
+const OFFER_TTL = 90_000;
+const BOOST_MS = 3 * 60_000;
+const BOOST_POLL_MS = 2_000;
+
+const invites = new Map<string, InviteSecret>();
+const channels = new Map<string, ChannelRecord>();
+const attempts = new Map<string, Attempt>();
+const lastKnock = new Map<string, number>();
+let boostTimer: ReturnType<typeof setInterval> | undefined;
+let boostUntil = 0;
+
+export const DEFAULT_RELAY: string | undefined = (import.meta.env.VITE_DEFAULT_RELAY as string | undefined) || undefined;
+
+/** Poll our queues every 2 s for a while: someone is (or may be) trying to connect. */
+function boost(ms = BOOST_MS) {
+  boostUntil = Math.max(boostUntil, Date.now() + ms);
+  void pollMailbox();
+}
+
+function connecting(): boolean {
+  const c = S().connect;
+  return attempts.size > 0 || (!!c && ['waiting', 'connecting', 'requested', 'link'].includes(c.step));
+}
+
+function publishInvites() {
+  const list: InviteSummary[] = [...invites.values()].map((i) => ({ iid: i.iid, created: i.created, expires: i.exp, claimed: !!i.claimedBy })).sort((a, b) => b.created - a.created);
+  store.set({ invites: list });
+}
+
+async function sendRtc(peer: string, t: Transport, msg: AppMessage) {
+  if (t.kind === 'contact') {
+    await sendApp(peer, msg);
+    return;
+  }
+  const ch = channels.get(t.iid);
+  if (!ch) throw new Error('invite channel closed');
+  await postToMailbox(ch.sendTo.relay, ch.sendTo.sid, await sealEnvelope(await envKey(ch.key), utf8(JSON.stringify(msg))));
+}
+
+function setConnecting(peer: string, on: boolean) {
+  store.set((s) => {
+    const presence = { ...s.presence };
+    if (on && presence[peer] !== 'online') presence[peer] = 'connecting';
+    if (!on && presence[peer] === 'connecting') delete presence[peer];
+    return { presence };
+  });
+}
+
+/** Ask a peer's device to connect. Times out quietly if they are not around. */
+async function knock(peer: string, t: Transport, hint = '', quiet = true) {
+  if (sessions.get(peer)?.isReady) return;
+  const current = attempts.get(peer);
+  if (current && Date.now() - current.started < 20_000) return; // already trying
+  const aid = randomId();
+  attempts.set(peer, { aid, role: 'knocker', started: Date.now() });
+  lastKnock.set(peer, Date.now());
+  setConnecting(peer, true);
+  boost();
+  try {
+    await sendRtc(peer, t, { t: 'rtc', k: 'knock', aid, ts: Date.now() });
+  } catch (err) {
+    attempts.delete(peer);
+    setConnecting(peer, false);
+    if (!quiet) toast(`Could not reach ${hint || 'them'}: ${(err as Error).message}`, 'error');
+    return;
+  }
+  setTimeout(() => {
+    if (attempts.get(peer)?.aid !== aid) return;
+    attempts.delete(peer);
+    setConnecting(peer, false);
+    if (!quiet && !sessions.get(peer)?.isReady) toast(`${hint || 'They'} did not answer. Messages will wait in their mailbox.`);
+  }, KNOCK_TTL);
+}
+
+/** One-tap (or automatic) reconnect to an existing contact through the mailbox. */
+export async function connectContact(chat: string, quiet = false): Promise<void> {
+  if (!canMail(chat)) return createInvite(chat, true);
+  closeConnect();
+  await knock(chat, { kind: 'contact' }, displayName(contact(chat)!), quiet);
+}
+
+async function offerTo(peer: string, t: Transport, aid: string) {
+  attempts.get(peer)?.link?.pc.close();
+  const link = createPeer(S().settings);
+  attempts.set(peer, { aid, role: 'offerer', link, started: Date.now() });
+  setConnecting(peer, true);
+  boost();
+  const sdp = await makeOffer(link);
+  if (attempts.get(peer)?.link !== link) return link.pc.close();
+  await sendRtc(peer, t, { t: 'rtc', k: 'offer', aid, ts: Date.now(), sdp });
+  setTimeout(() => {
+    const a = attempts.get(peer);
+    if (a?.link === link && !sessions.get(peer)?.isReady) {
+      link.pc.close();
+      attempts.delete(peer);
+      setConnecting(peer, false);
+    }
+  }, OFFER_TTL + 30_000);
+}
+
+/** Do we still want a connection with this peer (so stale offers deserve a fresh knock)? */
+function wantsConnection(peer: string) {
+  return attempts.get(peer)?.role === 'knocker' || [...channels.values()].some((c) => c.peerId === peer && c.role === 'joiner');
+}
+
+async function handleRtc(peer: string, t: Transport, m: AppMessage, hint: string) {
+  const ts = num(m.ts);
+  const aid = typeof m.aid === 'string' && /^[A-Za-z0-9_-]{16,32}$/.test(m.aid) ? m.aid : undefined;
+  if (!ts || !aid || peer === S().myId || sessions.get(peer)?.isReady) return;
+  const age = Date.now() - ts;
+  const mine = attempts.get(peer);
+  const iAmSmaller = S().myId < peer;
+
+  if (m.k === 'knock') {
+    if (age > KNOCK_TTL) return;
+    if (mine?.role === 'offerer' || mine?.role === 'answerer') return;
+    if (mine?.role === 'knocker' && !iAmSmaller) return; // glare: they will offer
+    const watching = S().activeChat === peer && document.visibilityState === 'visible';
+    if (!mine && t.kind === 'contact' && !S().settings.autoConnect && !watching) {
+      await addSystemNote(peer, `${hint || 'Your contact'} tried to connect. Tap Connect to reach them.`);
+      return;
+    }
+    return offerTo(peer, t, aid);
+  }
+
+  if (m.k === 'offer' && typeof m.sdp === 'string' && m.sdp.length < 16_000) {
+    if (age > OFFER_TTL) {
+      if (wantsConnection(peer)) void knock(peer, t, hint);
+      return;
+    }
+    if (mine?.role === 'offerer' && mine.aid !== aid && iAmSmaller) return; // glare: our offer wins
+    if (mine?.role === 'answerer' && mine.aid === aid) return; // duplicate
+    mine?.link?.pc.close();
+    const link = createPeer(S().settings);
+    attempts.set(peer, { aid, role: 'answerer', link, started: Date.now() });
+    setConnecting(peer, true);
+    const sdp = await acceptOffer(link, m.sdp);
+    const p: Pending = { link, ref: aid, role: 'responder', hint };
+    p.session = new Session(link, 'responder', identity!, peerPub(peer), sessionEvents(p));
+    await sendRtc(peer, t, { t: 'rtc', k: 'answer', aid, ts: Date.now(), sdp });
+    return;
+  }
+
+  if (m.k === 'answer' && typeof m.sdp === 'string' && m.sdp.length < 16_000) {
+    if (mine?.role !== 'offerer' || mine.aid !== aid || !mine.link) return;
+    await acceptAnswer(mine.link, m.sdp);
+    const p: Pending = { link: mine.link, ref: aid, role: 'initiator', hint };
+    p.session = new Session(mine.link, 'initiator', identity!, peerPub(peer), sessionEvents(p));
+  }
+}
+
+/** Clean up invite state once two devices have met. */
+async function onConnected(peer: string) {
+  attempts.delete(peer);
+  for (const ch of [...channels.values()]) {
+    if (ch.peerId !== peer) continue;
+    if (ch.role === 'inviter') {
+      invites.delete(ch.iid);
+      await R().deleteInvite(ch.iid);
+    }
+    await dropChannel(ch);
+  }
+  publishInvites();
+}
+
+async function dropChannel(ch: ChannelRecord) {
+  channels.delete(ch.iid);
+  if (repo) await R().deleteChannel(ch.iid);
+  if (ch.queue) await deleteMailbox(ch.queue).catch(() => {});
+}
+
+// ---- inviter side
+
+/** Creates a long-lived, single-use invite link (requires our mailbox). */
+export async function createInviteLink() {
+  if (!myMailbox) throw new Error('Set up a mailbox to create invite links');
+  closeConnect();
+  store.set({ connect: { mode: 'invite', step: 'creating' } });
+  try {
+    const days = Math.min(30, Math.max(1, S().settings.inviteDays || 7));
+    const secret = await createInviteSecret(days * 86_400_000);
+    await R().saveInvite(secret);
+    invites.set(secret.iid, secret);
+    publishInvites();
+    const inv: InviteV2 = { v: 2, id: S().myId, name: S().profile.name, relay: myMailbox.relay, sid: myMailbox.sid, ik: secret.ikPub, tok: secret.tok, iid: secret.iid, exp: secret.exp };
+    const code = await encodeInvite(inv);
+    store.set({ connect: { mode: 'invite', step: 'link', code, link: signalLink(code), expires: secret.exp } });
+  } catch (err) {
+    store.set({ connect: { mode: 'invite', step: 'error', error: (err as Error).message } });
+  }
+}
+
+export async function revokeInvite(iid: string) {
+  invites.delete(iid);
+  await R().deleteInvite(iid);
+  for (const ch of [...channels.values()]) if (ch.iid === iid) await dropChannel(ch);
+  publishInvites();
+}
+
+async function onJoin(inv: InviteSecret, note: JoinNote, chan: Uint8Array) {
+  if (note.id === S().myId) return;
+  if (inv.claimedBy && inv.claimedBy !== note.id) return; // single use: someone else got here first
+  let reply: { relay: string; sid: string };
+  try {
+    reply = { relay: normalizeRelayUrl(note.reply.relay, isLocalApp()), sid: note.reply.sid };
+    if (!/^[A-Za-z0-9_-]{22}$/.test(reply.sid)) return;
+  } catch {
+    return;
+  }
+  inv.claimedBy = note.id;
+  await R().saveInvite(inv);
+  const name = String(note.name ?? '').slice(0, MAX_NAME);
+  const ch: ChannelRecord = { iid: inv.iid, role: 'inviter', key: toB64u(chan), peerId: note.id, peerName: name, sendTo: reply, expires: inv.exp };
+  channels.set(ch.iid, ch);
+  await R().saveChannel(ch);
+  publishInvites();
+  if (document.visibilityState === 'visible') toast(`${name || 'Someone'} opened your invite - connecting...`);
+  else void notify({ kind: 'connected', name: name || undefined });
+  // A join is a standing request: offer now even if it waited a while; if they are
+  // gone, their app knocks again when it comes back.
+  await offerTo(note.id, { kind: 'channel', iid: ch.iid }, note.aid);
+}
+
+// ---- joiner side
+
+let previewed: InviteV2 | undefined;
+
+async function previewInvite(text: string) {
+  try {
+    const inv = await decodeInvite(text);
+    if (inv.id === S().myId) throw new Error('This is your own invite - send it to someone else');
+    if (inv.exp < Date.now()) throw new Error('This invite link has expired. Ask for a new one.');
+    previewed = inv;
+    closeConnect();
+    if (contact(inv.id) && canMail(inv.id)) {
+      // Already a contact: just reach them.
+      await openChat(inv.id);
+      return connectContact(inv.id);
+    }
+    store.set({ connect: { mode: 'join', step: 'confirm', peerName: inv.name } });
+  } catch (err) {
+    store.set({ connect: { mode: 'join', step: 'error', error: (err as Error).message } });
+  }
+}
+
+/** Accept the previewed invite: leave an encrypted join note in the inviter's mailbox. */
+export async function acceptInvite() {
+  const inv = previewed;
+  if (!inv) return;
+  store.set({ connect: { mode: 'join', step: 'creating', peerName: inv.name } });
+  try {
+    const relay = normalizeRelayUrl(inv.relay, isLocalApp());
+    let queue: ChannelRecord['queue'];
+    let reply: { relay: string; sid: string };
+    if (myMailbox) {
+      reply = { relay: myMailbox.relay, sid: myMailbox.sid };
+    } else {
+      // No mailbox of our own: a temporary reply queue on their relay, deleted after we meet.
+      queue = await createMailbox(relay);
+      reply = { relay: queue.relay, sid: queue.sid };
+    }
+    const aid = randomId();
+    const note: JoinNote = { t: 'join', iid: inv.iid, tok: inv.tok, id: S().myId, name: S().profile.name, reply, aid, ts: Date.now() };
+    const { envelope, chan } = await sealJoin(inv, note);
+    const ch: ChannelRecord = { iid: inv.iid, role: 'joiner', key: toB64u(chan), peerId: inv.id, peerName: inv.name, sendTo: { relay, sid: inv.sid }, queue, expires: inv.exp };
+    wipe(chan);
+    channels.set(ch.iid, ch);
+    await R().saveChannel(ch);
+    attempts.set(inv.id, { aid, role: 'knocker', started: Date.now() });
+    lastKnock.set(inv.id, Date.now());
+    await postToMailbox(relay, inv.sid, envelope);
+    previewed = undefined;
+    boost();
+    void holdWakeLock();
+    store.set({ connect: { mode: 'join', step: 'requested', peerName: inv.name } });
+  } catch (err) {
+    store.set({ connect: { mode: 'join', step: 'error', peerName: inv.name, error: (err as Error).message } });
+  }
+}
+
+// ---- keep the screen awake while waiting for someone
+
+let wakeLock: { release(): Promise<void> } | undefined;
+async function holdWakeLock() {
+  try {
+    wakeLock ??= await (navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<{ release(): Promise<void> }> } }).wakeLock?.request('screen');
+  } catch {
+    /* not supported or not allowed - fine */
+  }
+}
+function releaseWakeLock() {
+  void wakeLock?.release().catch(() => {});
+  wakeLock = undefined;
+}

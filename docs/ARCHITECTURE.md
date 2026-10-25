@@ -145,6 +145,28 @@ Every live session re-seeds a new **epoch**. The previous epoch is kept so mail 
 
 **Relay design:** see [relay/README.md](../relay/README.md). It uses unlinkable `rid`/`sid` capabilities, Ed25519-signed owner requests with a 5-minute window, per-IP in-memory rate limits, quotas, a 30-day TTL, `secure_delete`, no logs, a non-root read-only container, and zero npm runtime dependencies.
 
+## Invite links and one-tap reconnect (rendezvous)
+
+Manual codes are WebRTC offers tied to a live `RTCPeerConnection`, so they die when the inviter's tab closes or locks, and both people must be online together. With a mailbox, Veil uses the relay as a **rendezvous** for signaling instead.
+
+**Invite links (v2):** `#VEIL2I.<deflate(JSON{ v:2, id, name, relay, sid, ik, tok, iid, exp })>`, about 340 characters.
+- `ik` is an X25519 key made for this invite. `tok` is a 128-bit secret, and `exp` defaults to 7 days (1 to 30 configurable). The inviter keeps `ik`'s private key and `tok` in the vault and can revoke them.
+- The joiner seals a `join` note: `epk || envelope(k_join, { iid, tok, id, name, reply, aid, ts })` with `(k_join || k_chan) = HKDF(X25519(epk, ik), salt = iid, "veil/v1/invite")`. A joiner without a mailbox creates a temporary reply queue on the inviter's relay, deleted after they meet.
+- The inviter trial-decrypts unknown mail against its active invites. It checks `tok` in constant time and **claims** the invite for the first joiner's identity (single use), then starts signaling over `k_chan`.
+
+**Signaling:** three messages, `{ t: "rtc", k: "knock" | "offer" | "answer", aid, ts, sdp? }`.
+- Between contacts they travel **inside the Double Ratchet**, so they are authenticated as that contact. Over an invite they are sealed with `k_chan`.
+- Knocks are valid for 3 minutes and offers for 90 seconds. A stale offer makes the side that still wants to connect knock again, so the devices meet whenever both are online.
+- Glare (both knock or both offer) is resolved by identity order: the smaller key offers.
+- While an attempt is in progress, the app polls its queues every 2 seconds (otherwise every 30 seconds, plus on push and on resume).
+- The resulting live session runs the normal hybrid post-quantum handshake with `expectedPeer` pinned to the identity from the invite or contact. A relay that tampers with signaling only causes a failed connection.
+
+**Auto-connect (setting, on by default):** opening a chat with an offline contact sends one knock (at most every 5 minutes), and incoming knocks are answered automatically. Turning it off stops your device from revealing that you are online. Knocks are then answered only while you have that chat open, and otherwise logged as "tried to connect".
+
+**Manual codes are still there** (no mailbox, or both people together). They no longer auto-lock while waiting, hold a screen wake lock, and expire explicitly after 15 minutes with a clear message, instead of failing silently.
+
+**Default relay:** builds can embed `VITE_DEFAULT_RELAY` (from the `VEIL_DEFAULT_RELAY` repository variable in CI). New users are offered it during onboarding as an opt-in, and the invite sheet offers one-tap setup.
+
 ## Encrypted backups
 
 A backup is one portable `.veilbackup` file (see `app/src/storage/backup.ts`):

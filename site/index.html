@@ -554,6 +554,10 @@
           <p>On iPhone and iPad, apps added to the Home Screen get their own storage, completely separate from Safari, so they act as two different installations. Install Veil before you start chatting, or move your data: in Safari open Settings, create a backup, then choose "Restore from a backup" in the Home Screen app. On Android and desktop, the installed app and the browser share the same data, and Veil runs in one window at a time to keep it in sync.</p>
         </details>
         <details class="reveal">
+          <summary>Do we have to be online at the same time to connect?</summary>
+          <p>Not if you use a mailbox relay. Your invite becomes a single link that stays valid for 7 days. Your friend opens it whenever they like, and the two apps connect on their own the next time you are both online - no reply code to send back. Contacts you already have reconnect with one tap. Without a relay, Veil falls back to one-time codes that work while both screens are open.</p>
+        </details>
+        <details class="reveal">
           <summary>Can I message someone who is offline?</summary>
           <p>Yes, if they set up a mailbox relay - a tiny service anyone can run with one Docker command. Your message is encrypted with the Signal Double Ratchet (seeded from Veil's post-quantum handshake), padded, and left in their mailbox with no sender id. The relay only ever holds ciphertext and deletes it once collected. It can also wake their device with an empty push notification. Without a relay, Veil stays purely peer-to-peer.</p>
         </details>

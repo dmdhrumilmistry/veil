@@ -65,6 +65,9 @@ jobs:
 
       - name: Audit, typecheck, unit tests, build
         working-directory: app
+        env:
+          # Optional: Settings > Variables > VEIL_DEFAULT_RELAY (e.g. https://relay.example.com)
+          VITE_DEFAULT_RELAY: ${{ vars.VEIL_DEFAULT_RELAY }}
         run: |
           npm audit --omit=dev --audit-level=high
           npm run typecheck

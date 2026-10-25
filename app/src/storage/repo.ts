@@ -3,6 +3,7 @@ import { generateIdentity, importIdentityPrivate, type Identity } from '../crypt
 import * as idb from './idb';
 import type { RatchetJSON } from '../crypto/ratchet';
 import type { MyMailbox } from '../net/mailbox';
+import type { InviteSecret } from '../net/invite';
 import type { Vault } from './vault';
 
 /** `queued`: waiting in the recipient's mailbox relay (they were offline). */
@@ -73,6 +74,10 @@ export interface Settings {
   notifications: boolean;
   /** Show contact names in notifications (visible on lock screens). */
   notifyNames: boolean;
+  /** Knock on a contact's device when opening their chat, and answer their knocks. */
+  autoConnect: boolean;
+  /** Lifetime of invite links, in days. */
+  inviteDays: number;
   /** Epoch ms of the last successful backup (0 = never). */
   lastBackupAt: number;
 }
@@ -89,6 +94,8 @@ export const DEFAULT_SETTINGS: Settings = {
   enterToSend: true,
   notifications: false,
   notifyNames: false,
+  autoConnect: true,
+  inviteDays: 7,
   lastBackupAt: 0,
 };
 
@@ -110,6 +117,19 @@ export interface AsyncEpoch {
 
 export interface AsyncState {
   epochs: AsyncEpoch[];
+}
+
+/** Signaling channel opened by an invite link, until the two devices first connect. */
+export interface ChannelRecord {
+  iid: string;
+  role: 'inviter' | 'joiner';
+  key: string;
+  peerId: string;
+  peerName: string;
+  sendTo: { relay: string; sid: string };
+  /** Joiner without a mailbox: temporary reply queue on the inviter's relay. */
+  queue?: MyMailbox;
+  expires: number;
 }
 
 /** A sealed envelope waiting to be uploaded (relay unreachable at send time). */
@@ -199,6 +219,30 @@ export class Repo {
 
   async deleteAsync(id: string) {
     await idb.del('kv', await this.asyncSlot(id));
+  }
+
+  async listInvites(): Promise<InviteSecret[]> {
+    return (await this.vault.listJson<InviteSecret>('kv', 'invite/')).map(([, v]) => v);
+  }
+
+  saveInvite(i: InviteSecret) {
+    return this.vault.putJson('kv', `invite/${i.iid}`, i);
+  }
+
+  deleteInvite(iid: string) {
+    return idb.del('kv', `invite/${iid}`);
+  }
+
+  async listChannels(): Promise<ChannelRecord[]> {
+    return (await this.vault.listJson<ChannelRecord>('kv', 'chan/')).map(([, v]) => v);
+  }
+
+  saveChannel(c: ChannelRecord) {
+    return this.vault.putJson('kv', `chan/${c.iid}`, c);
+  }
+
+  deleteChannel(iid: string) {
+    return idb.del('kv', `chan/${iid}`);
   }
 
   async listOutbox(): Promise<OutboxItem[]> {

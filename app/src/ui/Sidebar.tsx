@@ -83,6 +83,8 @@ export function Sidebar() {
                         {p.kind === 'file' && <Icon name="clip" size={13} />}
                         {p.text}
                       </>
+                    ) : presence[c.id] === 'connecting' ? (
+                      'Connecting...'
                     ) : online ? (
                       'Connected'
                     ) : (

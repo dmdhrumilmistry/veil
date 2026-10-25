@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import {
   acceptFile,
   cancelTransfer,
+  connectContact,
   createInvite,
   declineFile,
   deleteMessage,
@@ -338,6 +339,7 @@ export function Chat({ contact }: { contact: Contact }) {
   const list = messages[contact.id];
   const online = presence[contact.id] === 'online';
   const mailable = !!offline[contact.id];
+  const reaching = presence[contact.id] === 'connecting';
   const isTyping = (typing[contact.id] ?? 0) > Date.now() - 4000;
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -408,7 +410,7 @@ export function Chat({ contact }: { contact: Contact }) {
               {contact.verified && <Icon name="shieldCheck" size={15} class="verified" />}
             </span>
             <span class={`chat-status ${online ? 'on' : ''} ${isTyping ? 'typing' : ''}`}>
-              {isTyping ? 'typing...' : online ? (<><Icon name="lock" size={11} /> End-to-end encrypted</>) : mailable ? (<><Icon name="mail" size={11} /> Offline - messages wait in their mailbox</>) : 'Offline'}
+              {isTyping ? 'typing...' : online ? (<><Icon name="lock" size={11} /> End-to-end encrypted</>) : reaching ? 'Connecting...' : mailable ? (<><Icon name="mail" size={11} /> Offline - messages wait in their mailbox</>) : 'Offline'}
               {contact.disappearSecs > 0 && <span class="ttl-chip"><Icon name="clock" size={11} /> {formatTtl(contact.disappearSecs)}</span>}
             </span>
           </span>
@@ -427,12 +429,22 @@ export function Chat({ contact }: { contact: Contact }) {
 
       {!online && (
         <div class={`offline-banner ${mailable ? 'mailable' : ''}`} role="status">
-          <span class="ob-icon"><Icon name={mailable ? 'mail' : 'plug'} size={16} /></span>
+          <span class={`ob-icon ${reaching ? 'pulsing' : ''}`}><Icon name={mailable ? 'mail' : 'plug'} size={16} /></span>
           <span class="ob-text">
-            <b>{mailable ? `${name} is offline` : 'Not connected'}</b>
-            <span>{mailable ? 'Messages are encrypted and wait in their mailbox. Reconnect to send files.' : 'Reconnect with a fresh invite to keep chatting.'}</span>
+            <b>{reaching ? `Reaching ${name}...` : mailable ? `${name} is offline` : 'Not connected'}</b>
+            <span>
+              {reaching
+                ? 'If they have Veil open, you will be connected in a few seconds.'
+                : mailable
+                  ? 'Messages wait in their mailbox. Connect to send files.'
+                  : 'Send them a fresh invite to keep chatting.'}
+            </span>
           </span>
-          <button class={`btn ${mailable ? 'ghost' : 'primary'} sm`} onClick={() => void createInvite(contact.id)}>Reconnect</button>
+          {!reaching && (
+            <button class={`btn ${mailable ? 'ghost' : 'primary'} sm`} onClick={() => void (mailable ? connectContact(contact.id) : createInvite(contact.id))}>
+              {mailable ? 'Connect' : 'Reconnect'}
+            </button>
+          )}
         </div>
       )}
 

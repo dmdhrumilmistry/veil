@@ -64,6 +64,12 @@ site/                Marketing website (static, no build step)
 docs/                Architecture and threat model
 ```
 
+## Invite links (no codes to send back)
+
+With a mailbox, **New chat** gives you one short link that works for 7 days for one person. Share it any way you like and go offline. When they open it and tap Connect, both apps find each other through the relay and connect on their own the next time you are both online. Existing contacts reconnect with one tap (or automatically when you open their chat): no codes at all. Without a mailbox, the original one-time codes still work.
+
+To give every new user this experience out of the box, deploy a relay and set the repository variable **`VEIL_DEFAULT_RELAY`** (Settings → Secrets and variables → Actions → Variables) to its URL. The next release embeds it as an opt-in default.
+
 ## Offline messages
 
 Veil is peer-to-peer first. To receive messages while you are offline, run a tiny [mailbox relay](relay/README.md) (one `docker compose up`) and enter its address under **Settings → Offline messages**. Contacts learn your mailbox the next time you connect live. After that:

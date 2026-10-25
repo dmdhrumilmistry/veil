@@ -11,9 +11,9 @@ A private messenger shipped as an installable PWA. Live chat and files go peer-t
 | Path | What | Notes |
 |---|---|---|
 | `app/src/crypto/` | `primitives.ts` (the only WebCrypto wrapper), `handshake.ts` (X25519 + ML-KEM-768 + Ed25519), `chain.ts` (live KDF chains), `ratchet.ts` (Double Ratchet), `identity.ts` (keys, safety numbers), `encoding.ts` | Security critical. Every change needs tests |
-| `app/src/net/` | `peer.ts` (RTCPeerConnection, 2 pre-negotiated data channels), `signaling.ts` (invite/reply codes), `session.ts` (encrypted live session), `mailbox.ts` (relay client + padded envelopes) | |
+| `app/src/net/` | `peer.ts` (RTCPeerConnection, 2 pre-negotiated data channels), `signaling.ts` (manual one-time codes), `invite.ts` (v2 invite links + sealed join notes), `session.ts` (encrypted live session), `mailbox.ts` (relay client + padded envelopes) | |
 | `app/src/storage/` | `vault.ts` (PBKDF2-wrapped master key, sealed records), `repo.ts` (typed records), `backup.ts` (`.veilbackup` format), `idb.ts` | Never store plaintext; all values go through the vault |
-| `app/src/state/` | `app.ts` (controller: sessions, transfers, offline mail, backup/restore), `store.ts` (reactive store), `notify.ts`, `install.ts`, `instance.ts` (single active window) | UI never touches crypto/net directly |
+| `app/src/state/` | `app.ts` (controller: sessions, transfers, offline mail, rendezvous signaling, backup/restore), `store.ts` (reactive store), `notify.ts`, `install.ts`, `instance.ts` (single active window) | UI never touches crypto/net directly |
 | `app/src/ui/` | Preact components; `app/src/styles/app.css` | |
 | `app/sw/sw.js` | Service worker template (precache list injected at build) | |
 | `app/test/` | Vitest unit tests | |

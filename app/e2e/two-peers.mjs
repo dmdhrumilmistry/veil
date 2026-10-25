@@ -107,6 +107,8 @@ try {
     await page.getByLabel('Relay address').fill(RELAY);
     await page.getByRole('button', { name: 'Set up' }).click();
     await page.getByText(`Mailbox on 127.0.0.1:${RELAY_PORT}`).waitFor({ timeout: 15000 });
+    // Keep the scripted scenarios deterministic: no automatic knocking in the background.
+    await page.getByRole('checkbox', { name: /^Connect automatically/ }).uncheck();
     if (mobile) await page.getByRole('button', { name: 'Back', exact: true }).click();
   };
   await setupMailbox(alice, false);
@@ -300,6 +302,42 @@ try {
   await bob.getByLabel('Waiting in their mailbox').last().waitFor({ timeout: 15000 });
   await arrives(alice, alice.locator('p.text', { hasText: 'got it, replying offline' }));
   console.log('offline messages via mailbox ok (queued, delivered, read receipt, reply; relay saw only ciphertext)');
+
+  // One-tap reconnect through the mailboxes: no codes. Bob is looking at Alice's chat.
+  await alice.getByRole('button', { name: 'Connect', exact: true }).click();
+  await arrives(bob, bob.getByText('End-to-end encrypted', { exact: true }), 30000);
+  await arrives(alice, alice.getByText('End-to-end encrypted', { exact: true }), 30000);
+  console.log('one-tap reconnect via mailbox ok (no codes)');
+
+  // Invite link: Alice shares a link and goes away; Dave (no mailbox) accepts it later.
+  await alice.getByRole('button', { name: 'New chat' }).click();
+  await alice.getByText('Your invite link is ready').waitFor();
+  await alice.getByRole('button', { name: 'Copy link' }).click();
+  const inviteLink = await clip(alice);
+  if (!inviteLink.includes('#VEIL2I.')) fail(`unexpected invite link ${inviteLink.slice(0, 60)}`);
+  console.log(`invite link: ${inviteLink.length} chars`);
+  await shot(alice, 'invite-link.png');
+  await alice.getByRole('button', { name: 'Done' }).click();
+  await alice.getByRole('button', { name: 'Lock now' }).click();
+  await alice.getByRole('heading', { name: 'Veil is locked' }).waitFor();
+
+  const dave = await peer('Dave', { width: 390, height: 844 });
+  await dave.goto(inviteLink);
+  await dave.getByRole('heading', { name: 'Alice invited you to chat' }).waitFor({ timeout: 15000 });
+  await shot(dave, 'invite-confirm.png');
+  await dave.getByRole('button', { name: 'Connect', exact: true }).click();
+  await dave.getByRole('heading', { name: /Asking Alice to connect/ }).waitFor({ timeout: 15000 });
+  await shot(dave, 'invite-requested.png');
+  // Alice comes back: her Veil finds the join note and the two devices meet on their own.
+  await alice.getByPlaceholder('Passphrase').fill(PASS);
+  await alice.getByRole('button', { name: 'Unlock' }).click();
+  await arrives(dave, dave.getByText('End-to-end encrypted', { exact: true }), 45000);
+  await alice.getByRole('button', { name: /Dave/ }).first().waitFor({ timeout: 15000 });
+  await dave.getByLabel('Message', { exact: true }).fill('joined from a link, no codes');
+  await dave.keyboard.press('Enter');
+  await alice.getByRole('button', { name: /Dave/ }).first().click();
+  await alice.locator('p.text', { hasText: 'joined from a link, no codes' }).waitFor({ timeout: 15000 });
+  console.log('invite link ok (inviter offline at join time, joiner without mailbox, auto-connect on return)');
 
   // Data at rest must not contain plaintext.
   const leaked = await alice.evaluate(async () => {
