@@ -51,6 +51,33 @@ export type HandshakeMessage = HelloI | HelloR | Fin;
 
 export class HandshakeError extends Error {}
 
+export interface HelloIFields {
+  id: Uint8Array;
+  eph: Uint8Array;
+  kem: Uint8Array;
+  n: Uint8Array;
+}
+export interface HelloRFields {
+  id: Uint8Array;
+  eph: Uint8Array;
+  ct: Uint8Array;
+  n: Uint8Array;
+}
+
+/** T = SHA-256(lp(label, fp_I, fp_R, hello_I fields, hello_R fields)). Exported for test vectors. */
+export function transcriptHash(fpI: Uint8Array, fpR: Uint8Array, i: HelloIFields, r: HelloRFields): Promise<Bytes> {
+  return sha256(lpConcat(LABEL, fpI, fpR, i.id, i.eph, i.kem, i.n, r.id, r.eph, r.ct, r.n));
+}
+
+/** HKDF output split into [ctrl I->R, ctrl R->I, bulk I->R, bulk R->I, async root]. */
+export async function deriveKeyMaterial(ss: Uint8Array, transcript: Uint8Array): Promise<[Bytes, Bytes, Bytes, Bytes, Bytes]> {
+  const okm = await hkdf(ss, transcript, INFO, 160);
+  const k = (i: number) => okm.slice(i * 32, (i + 1) * 32);
+  const keys: [Bytes, Bytes, Bytes, Bytes, Bytes] = [k(0), k(1), k(2), k(3), k(4)];
+  wipe(okm);
+  return keys;
+}
+
 const LABEL = utf8('veil/v1/handshake');
 const SIG_I = utf8('veil/v1/sig/I');
 const SIG_R = utf8('veil/v1/sig/R');
@@ -80,7 +107,7 @@ export class Handshake {
   private ephPub?: Bytes;
   private kem?: { publicKey: Uint8Array; secretKey: Uint8Array };
   private nonce = randomBytes(32);
-  private helloI?: { id: Bytes; eph: Bytes; kem: Bytes; n: Bytes };
+  private helloI?: HelloIFields;
   private pending?: { keys: SessionKeys; transcript: Bytes; peer: Bytes };
   private done = false;
 
@@ -144,17 +171,14 @@ export class Handshake {
     throw new HandshakeError('unexpected handshake message');
   }
 
-  private async transcript(i: { id: Bytes; eph: Bytes; kem: Bytes; n: Bytes }, r: { id: Bytes; eph: Bytes; ct: Bytes; n: Bytes }): Promise<Bytes> {
+  private async transcript(i: HelloIFields, r: HelloRFields): Promise<Bytes> {
     const [fpI, fpR] = this.fps();
-    return sha256(lpConcat(LABEL, fpI, fpR, i.id, i.eph, i.kem, i.n, r.id, r.eph, r.ct, r.n));
+    return transcriptHash(fpI, fpR, i, r);
   }
 
   private async derive(ss: Bytes, transcript: Bytes, peer: Bytes): Promise<SessionKeys> {
-    const okm = await hkdf(ss, transcript, INFO, 160);
+    const [ctrlI2R, ctrlR2I, bulkI2R, bulkR2I, asyncRoot] = await deriveKeyMaterial(ss, transcript);
     wipe(ss);
-    const k = (i: number) => okm.slice(i * 32, (i + 1) * 32);
-    const [ctrlI2R, ctrlR2I, bulkI2R, bulkR2I, asyncRoot] = [k(0), k(1), k(2), k(3), k(4)];
-    wipe(okm);
     const initiator = this.o.role === 'initiator';
     return {
       ctrlSend: initiator ? ctrlI2R : ctrlR2I,

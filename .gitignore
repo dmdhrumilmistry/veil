@@ -4,3 +4,6 @@ _site/
 *.log
 .DS_Store
 test-results/
+.dart_tool/
+flutter/**/build/
+flutter/**/.flutter-plugins*
