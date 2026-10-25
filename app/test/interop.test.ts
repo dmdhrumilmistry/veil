@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline';
 import { describe, expect, it } from 'vitest';
 import { RecvChain, SendChain } from '../src/crypto/chain';
 import { fromB64u, toB64u, toHex, utf8 } from '../src/crypto/encoding';
-import { Handshake, type Role } from '../src/crypto/handshake';
+import { Handshake, type HandshakeMessage, type Role } from '../src/crypto/handshake';
 import { generateIdentity } from '../src/crypto/identity';
 import { sha256 } from '../src/crypto/primitives';
 
@@ -41,7 +41,7 @@ async function run(tsRole: Role) {
 
   let keys;
   let dartDone: Record<string, unknown> | undefined;
-  let toDart = tsRole === 'initiator' ? await hs.start() : undefined;
+  let toDart: HandshakeMessage | undefined = tsRole === 'initiator' ? await hs.start() : undefined;
   let fromDart = init.hs as object | undefined;
   for (let i = 0; i < 4 && !(keys && dartDone); i++) {
     if (fromDart) {

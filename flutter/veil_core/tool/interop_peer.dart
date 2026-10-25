@@ -8,6 +8,7 @@ import 'package:veil_core/veil_core.dart';
 Future<void> main() async {
   late Handshake hs;
   late Identity me;
+  // ignore: unused_local_variable
   SessionKeys? keys;
   SendChain? tx;
   RecvChain? rx;
@@ -30,12 +31,13 @@ Future<void> main() async {
           send({'id': me.id, if (m['role'] == 'initiator') 'hs': await hs.start()});
         case 'hs':
           final r = await hs.receive(m['msg']);
-          if (r.keys != null) {
-            keys = r.keys;
-            tx = SendChain(keys!.ctrlSend, 'veil/v1/ctrl');
-            rx = RecvChain(keys!.ctrlRecv, 'veil/v1/ctrl');
+          final k = r.keys;
+          if (k != null) {
+            keys = k;
+            tx = SendChain(k.ctrlSend, 'veil/v1/ctrl');
+            rx = RecvChain(k.ctrlRecv, 'veil/v1/ctrl');
           }
-          send({'hs': r.reply, 'done': keys != null, if (keys != null) 'asyncRoot': toHex(await sha256(keys!.asyncRoot)), if (keys != null) 'peer': toB64u(keys!.peerIdentity)});
+          send({'hs': r.reply, 'done': k != null, if (k != null) 'asyncRoot': toHex(await sha256(k.asyncRoot)), if (k != null) 'peer': toB64u(k.peerIdentity)});
         case 'frames':
           final opened = [for (final f in m['in'] as List) utf8.decode(await rx!.open(fromB64u(f as String)))];
           final out = [for (final p in m['send'] as List) toB64u(await tx!.seal(utf8.encode(p as String)))];

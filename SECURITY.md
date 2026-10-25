@@ -17,6 +17,7 @@ Please report security problems privately through **GitHub Security Advisories**
 | **Infrastructure operators** (STUN/TURN) | They never see plaintext or keys. STUN learns IP addresses only. TURN relays ciphertext only. |
 | **Later key compromise** | Ephemeral session keys and per-message key ratcheting mean a stolen device does not reveal past sessions' traffic. |
 | **Tampering, replay, reordering** | AEAD with strict sequence numbers. Any failure tears down the session. Files are SHA-256 verified end to end. |
+| **Device theft (native app)** | A random 32-byte master key lives in the OS keystore (hardware-backed where available) and is released only after biometrics or the device PIN. App data is excluded from Android cloud backups. |
 | **Device theft while locked** | All data is encrypted at rest. The passphrase is stretched with PBKDF2-SHA-256 (600,000 iterations). Lookup keys are HMAC tags, so even contact identifiers are not visible. |
 | **XSS / script injection** | Strict CSP (`default-src 'none'`, `script-src 'self'`), Trusted Types enforced, no `innerHTML`, no inline scripts or styles, no third-party code. Only inert media types render inline. Everything else downloads as `application/octet-stream`. |
 | **Public Nostr relay operators** (invite links, offline messages, reconnect; can be turned off) | See only padded ciphertext addressed to a pseudonymous mailbox key, each event signed by a fresh throwaway key, so they cannot read content or link messages to a sender. Offline messages use the Double Ratchet seeded from the post-quantum handshake, and signaling is end-to-end encrypted too. A malicious relay can drop or delay messages, but cannot forge or alter them. |
@@ -37,7 +38,7 @@ Please report security problems privately through **GitHub Security Advisories**
 
 ### Known limitations
 
-- No independent audit yet.
+- No independent audit yet. This covers both implementations (TypeScript and Dart). Cross-implementation vectors and a live interop test keep them identical on the wire, but each still needs review.
 - JavaScript cannot guarantee secrets are wiped from memory. Veil zeroes buffers where it can and keeps long-term private keys as non-extractable `CryptoKey`s while unlocked.
 - Disappearing messages are enforced by both Veil apps, but a modified client could ignore them.
 - Message counts per conversation are visible in IndexedDB (as opaque encrypted records).

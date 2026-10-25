@@ -7,9 +7,9 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:e2e": "node e2e/two-peers.mjs",
     "test:e2e:public": "RELAY_URLS=\"wss://nos.lol wss://relay.primal.net wss://nostr.mom\" node e2e/two-peers.mjs"
@@ -25,6 +25,7 @@
     "qrcode-generator": "2.0.4"
   },
   "devDependencies": {
+    "@types/node": "24.19.2",
     "fake-indexeddb": "6.2.6",
     "playwright": "1.64.1",
     "typescript": "5.9.3",
