@@ -279,19 +279,26 @@ try {
   await shot(alice, 'offline-queued.png');
   // Bob comes back: Veil checks the mailbox when it becomes visible.
   const wake = (page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  // Mail may land just after a check; keep nudging (as the 30 s poll / push would) until it shows.
+  const arrives = async (page, locator, ms = 20000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (await locator.isVisible().catch(() => false)) return;
+      await wake(page);
+      await page.waitForTimeout(500);
+    }
+    await locator.waitFor({ timeout: 1000 });
+  };
   await bob.getByRole('button', { name: 'Back', exact: true }).click();
-  await wake(bob);
-  await bob.locator('p.text', { hasText: 'sent while you were away' }).waitFor({ timeout: 15000 });
+  await arrives(bob, bob.locator('p.text', { hasText: 'sent while you were away' }));
   await shot(bob, 'offline-received.png');
   // Bob's read receipt travels back through Alice's mailbox.
-  await wake(alice);
-  await alice.getByLabel('Read').last().waitFor({ timeout: 15000 });
+  await arrives(alice, alice.locator('.msg.out.last', { hasText: 'sent while you were away' }).getByLabel('Read'));
   // ...and Bob can reply while Alice is "away" too.
   await bob.getByLabel('Message', { exact: true }).fill('got it, replying offline');
   await bob.keyboard.press('Enter');
   await bob.getByLabel('Waiting in their mailbox').last().waitFor({ timeout: 15000 });
-  await wake(alice);
-  await alice.locator('p.text', { hasText: 'got it, replying offline' }).waitFor({ timeout: 15000 });
+  await arrives(alice, alice.locator('p.text', { hasText: 'got it, replying offline' }));
   console.log('offline messages via mailbox ok (queued, delivered, read receipt, reply; relay saw only ciphertext)');
 
   // Data at rest must not contain plaintext.
