@@ -1,17 +1,16 @@
 import { useState } from 'preact/hooks';
-import { pollMailbox, removeMailbox, setMailboxPush, setupMailbox } from '../state/app';
-import { notifyPermission, requestNotifyPermission } from '../state/notify';
+import { reconnectRelays, setRelays, setRelaysEnabled } from '../state/app';
 import { toast, useApp } from '../state/store';
+import { DEFAULT_RELAYS } from '../net/nostr';
 import { Icon } from './icons';
 
-const DEPLOY_DOCS = 'https://github.com/dmdhrumilmistry/veil/blob/main/relay/README.md';
-
-/** Settings card: offline messages through a self-hosted mailbox relay. */
-export function MailboxCard() {
-  const { mailbox, mailboxError } = useApp();
-  const [url, setUrl] = useState('');
+/** Settings card: public Nostr relays used as encrypted, untrusted pipes. */
+export function RelaysCard() {
+  const { settings, relayStatus } = useApp();
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(settings.relays.join('\n'));
   const [busy, setBusy] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(false);
+  const open = relayStatus.filter((r) => r.state === 'open').length;
 
   const run = async (fn: () => Promise<unknown>, ok?: string) => {
     setBusy(true);
@@ -25,61 +24,58 @@ export function MailboxCard() {
     }
   };
 
-  const togglePush = (on: boolean) =>
-    run(async () => {
-      if (on && (await requestNotifyPermission()) !== 'granted') throw new Error('Allow notifications first');
-      await setMailboxPush(on);
-    }, on ? 'This device will be woken when mail arrives' : undefined);
-
   return (
-    <div class="card" id="mailbox">
+    <div class="card" id="relays">
       <div class="card-head">
-        <span class="card-icon"><Icon name="mail" size={18} /></span>
+        <span class="card-icon"><Icon name="globe" size={18} /></span>
         <div>
-          <h4>Offline messages</h4>
-          <p class="small muted">{mailbox ? `Mailbox on ${new URL(mailbox.relay).host}` : 'Off - contacts can only reach you while you are online'}</p>
+          <h4>Public relays</h4>
+          <p class="small muted">
+            {!settings.useRelays ? 'Off - peer-to-peer only, connect with one-time codes' : open ? `Connected to ${open} of ${relayStatus.length} relays` : 'Connecting...'}
+          </p>
         </div>
       </div>
 
-      {!mailbox ? (
-        <form class="stack" onSubmit={(e) => { e.preventDefault(); void run(() => setupMailbox(url), 'Mailbox ready. Contacts learn about it the next time you connect.'); }}>
-          <p class="muted small">
-            A mailbox relay holds end-to-end encrypted messages while you are offline. It only ever sees padded ciphertext - no names, no contacts, no content. Run your own in a minute with Docker, or use one you trust.
-          </p>
-          <div class="field">
-            <label for="mb-url">Relay address</label>
-            <div class="input-row">
-              <input id="mb-url" inputMode="url" autoComplete="off" spellcheck={false} placeholder="https://relay.example.com" value={url} onInput={(e) => setUrl(e.currentTarget.value)} />
-              <button class="btn primary sm" disabled={!url.trim() || busy}>{busy ? 'Connecting...' : 'Set up'}</button>
+      <label class="toggle">
+        <input type="checkbox" checked={settings.useRelays} disabled={busy} onChange={(e) => void run(() => setRelaysEnabled(e.currentTarget.checked))} />
+        <span>Invite links, offline messages and one-tap reconnect</span>
+      </label>
+      <p class="muted small">
+        Uses independent public Nostr relays as delivery pipes. Everything is end-to-end encrypted and padded before it leaves your device, and each message is signed by a throwaway key, so relays cannot read anything or tell who sent it. They can see your IP address and when your anonymous mailbox receives something.
+      </p>
+
+      <>
+        {settings.useRelays && (
+          <ul class="relay-list" aria-label="Relay status">
+            {relayStatus.map((r) => (
+              <li>
+                <span class={`dot ${r.state}`} aria-hidden="true" />
+                <span class="grow">{r.url.replace(/^wss?:\/\//, '')}</span>
+                <small class="muted">{r.state === 'open' ? 'connected' : r.state}</small>
+              </li>
+            ))}
+          </ul>
+        )}
+          {editing ? (
+            <div class="stack">
+              <div class="field">
+                <label for="relay-list">Relays (wss://, one per line, up to 6)</label>
+                <textarea id="relay-list" rows={4} spellcheck={false} value={text} onInput={(e) => setText(e.currentTarget.value)} />
+                <small>Contacts learn your new list the next time you are in touch.</small>
+              </div>
+              <div class="row wrap">
+                <button class="btn ghost sm" onClick={() => { setText(DEFAULT_RELAYS.join('\n')); }}>Restore defaults</button>
+                <button class="btn ghost sm" onClick={() => { setEditing(false); setText(settings.relays.join('\n')); }}>Cancel</button>
+                <button class="btn primary sm" disabled={busy} onClick={() => void run(() => setRelays(text.split(/\s+/)), 'Relays updated').then(() => setEditing(false))}>Save</button>
+              </div>
             </div>
-          </div>
-          <a class="link-btn left" href={DEPLOY_DOCS} target="_blank" rel="noopener noreferrer">How to run a relay</a>
-        </form>
-      ) : (
-        <>
-          {mailboxError ? (
-            <div class="callout warn"><Icon name="alert" size={18} /><span>{mailboxError}</span></div>
           ) : (
-            <p class="muted small"><Icon name="shieldCheck" size={14} /> Contacts you connect with can message you while you are away. Messages are fetched and deleted from the relay as soon as you open Veil.</p>
+            <div class="row wrap">
+              <button class="btn ghost sm" onClick={() => setEditing(true)}>Edit relays</button>
+              {settings.useRelays && <button class="btn ghost sm" onClick={reconnectRelays}>Reconnect</button>}
+            </div>
           )}
-          <label class="toggle">
-            <input type="checkbox" checked={mailbox.push} disabled={busy || notifyPermission() === 'unsupported' || notifyPermission() === 'needs-install'} onChange={(e) => void togglePush(e.currentTarget.checked)} />
-            <span>Wake this device when mail arrives <small class="muted">(push, no content)</small></span>
-          </label>
-          {notifyPermission() === 'needs-install' && <small class="muted">On iPhone and iPad, install Veil to the Home Screen to receive push.</small>}
-          <div class="row wrap">
-            <button class="btn ghost sm" disabled={busy} onClick={() => void run(pollMailbox, 'Mailbox checked')}>Check now</button>
-            {confirmRemove ? (
-              <>
-                <button class="btn ghost sm" onClick={() => setConfirmRemove(false)}>Keep</button>
-                <button class="btn danger sm" disabled={busy} onClick={() => void run(removeMailbox, 'Mailbox removed')}>Remove mailbox</button>
-              </>
-            ) : (
-              <button class="btn ghost sm danger-text" onClick={() => setConfirmRemove(true)}>Remove</button>
-            )}
-          </div>
-        </>
-      )}
+      </>
     </div>
   );
 }

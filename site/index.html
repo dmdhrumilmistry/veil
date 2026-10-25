@@ -6,7 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Veil - Private, peer-to-peer, post-quantum encrypted chat</title>
-  <meta name="description" content="Veil is a private chat and file sharing app that connects your devices directly over WebRTC. Post-quantum end-to-end encryption, no accounts, no servers storing your messages, open source.">
+  <meta name="description" content="Veil is a private chat and file sharing app that connects your devices directly over WebRTC. Post-quantum end-to-end encryption, no accounts, no servers of our own, open source.">
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#0B0B14" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#F6F6FB" media="(prefers-color-scheme: light)">
@@ -17,7 +17,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Veil">
   <meta property="og:title" content="Veil - Private conversations, with nothing in between">
-  <meta property="og:description" content="Peer-to-peer chat and file sharing with post-quantum end-to-end encryption. No accounts, no servers storing your messages, open source.">
+  <meta property="og:description" content="Peer-to-peer chat and file sharing with post-quantum end-to-end encryption. No accounts, no servers of our own, open source.">
   <meta property="og:url" content="https://dmdhrumilmistry.github.io/veil/">
   <meta property="og:image" content="https://dmdhrumilmistry.github.io/veil/og.png">
   <meta property="og:image:width" content="1200">
@@ -25,7 +25,7 @@
   <meta property="og:image:alt" content="Veil logo with the tagline: Private conversations, with nothing in between.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Veil - Private conversations, with nothing in between">
-  <meta name="twitter:description" content="Peer-to-peer chat and file sharing with post-quantum end-to-end encryption. No accounts. No servers. Open source.">
+  <meta name="twitter:description" content="Peer-to-peer chat and file sharing with post-quantum end-to-end encryption. No accounts. No backend. Open source.">
   <meta name="twitter:image" content="https://dmdhrumilmistry.github.io/veil/og.png">
 
   <script src="main.js" defer></script>
@@ -170,7 +170,7 @@
       <ul class="trust-list">
         <li class="reveal">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="19" cy="12" r="3"/><path d="M8 12h8"/></svg>
-          <span><b>No servers</b> Device-to-device</span>
+          <span><b>No backend</b> Device-to-device</span>
         </li>
         <li class="reveal">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/><path d="M3 3l18 18"/></svg>
@@ -212,8 +212,8 @@
         </article>
         <article class="card feature reveal">
           <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m4 7 8 6 8-6"/></svg></div>
-          <h3>Offline mailbox (optional)</h3>
-          <p>Leave messages for contacts who are away. A self-hosted relay holds only padded, Double Ratchet encrypted envelopes and wakes them with an empty push.</p>
+          <h3>Messages that wait for you</h3>
+          <p>Leave messages for contacts who are away. They travel as padded, Double Ratchet encrypted blobs over public Nostr relays - signed by a throwaway key each time, readable only by your contact.</p>
         </article>
         <article class="card feature reveal">
           <div class="icon-tile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 19h14"/></svg></div>
@@ -258,13 +258,13 @@
       <header class="section-head reveal">
         <p class="kicker">How it works</p>
         <h2 id="how-title">Connected in three steps</h2>
-        <p class="section-lead">There is no server to introduce you, so you introduce yourselves. Share codes over any channel you like - in person, or through another messenger.</p>
+        <p class="section-lead">One link, sent however you like. No accounts, no phone numbers, no codes to send back.</p>
       </header>
       <ol class="steps">
         <li class="card step reveal">
           <span class="step-num" aria-hidden="true">1</span>
-          <h3>Create an invite</h3>
-          <p>Veil generates an invite link and QR code that carries your identity key. Show the QR in person or send the link however you like.</p>
+          <h3>Share your invite link</h3>
+          <p>Veil makes a single-use link and QR code carrying your identity key. Send it any way you like - it stays valid for 7 days, so you can go offline.</p>
           <div class="step-art" aria-hidden="true">
             <div class="qr">
               <span></span><span></span><span></span><span></span><span></span>
@@ -277,22 +277,22 @@
         </li>
         <li class="card step reveal">
           <span class="step-num" aria-hidden="true">2</span>
-          <h3>They open it and reply</h3>
-          <p>Your contact opens the link in Veil, which produces a reply code. They send that code back to you through the same or any other channel.</p>
+          <h3>They tap Connect</h3>
+          <p>Your contact opens the link and taps Connect. Their Veil leaves an encrypted note for yours on public relays - nothing readable, nothing to send back.</p>
           <div class="step-art" aria-hidden="true">
-            <div class="code-pill">veil-reply: 7Hq2-xP9k-Lm4V...</div>
+            <div class="code-pill">Connecting to Alice...</div>
           </div>
         </li>
         <li class="card step reveal">
           <span class="step-num" aria-hidden="true">3</span>
           <h3>Connected - now verify</h3>
-          <p>Paste the reply and your devices connect directly. Compare safety numbers to confirm nobody is in between, then start chatting.</p>
+          <p>The next time you are both online, your devices connect directly on their own. Compare safety numbers to confirm nobody is in between, then chat.</p>
           <div class="step-art" aria-hidden="true">
             <div class="match"><span class="ok-badge">Safety numbers match</span></div>
           </div>
         </li>
       </ol>
-      <p class="callout reveal">Each new session needs a fresh invite exchange. That is the honest trade-off of having no server to rendezvous through.</p>
+      <p class="callout reveal">Prefer zero infrastructure? Turn public relays off and connect with one-time codes instead - you both just need to be online at the same moment.</p>
     </section>
 
     <!-- Security -->
@@ -522,12 +522,12 @@
           <p>No. There is no sign-up, no phone number and no email. Your identity is a key pair generated on your device.</p>
         </details>
         <details class="reveal">
-          <summary>Why do I have to exchange a new invite every session?</summary>
-          <p>Because there is no server to rendezvous through. Cloud messengers can reconnect you automatically because their servers know where you are. Veil deliberately has no such server, so each new live session starts with a fresh invite and reply exchange over a channel you choose. If your contact runs a mailbox relay, you can still leave them encrypted messages in between.</p>
+          <summary>Why would I ever need a one-time code?</summary>
+          <p>Only if you turn public relays off. Then there is nothing to rendezvous through, so each live session starts with a code and reply exchanged over a channel you choose, while both screens are open. With relays on (the default), invite links and reconnects happen automatically.</p>
         </details>
         <details class="reveal">
           <summary>Does Veil use any servers at all?</summary>
-          <p>Only to help devices find each other on the network. Public STUN servers tell your device its public address - they never see message content. You can disable STUN in settings and configure your own TURN relay instead. A TURN relay forwards traffic but only ever sees ciphertext. Nothing stores or relays your messages by default.</p>
+          <p>No servers of our own. Two kinds of public infrastructure can help: STUN servers tell your device its public address so peers can find each other, and public Nostr relays carry invite links, offline messages and reconnect requests. Everything that touches a relay is end-to-end encrypted, padded and signed by a throwaway key, so relays cannot read it or tell who sent it - they see an anonymous mailbox address, timing and IP addresses. You can turn relays off in settings to stay purely peer-to-peer, disable STUN, or add your own TURN server.</p>
         </details>
         <details class="reveal">
           <summary>Why won't it connect on some networks?</summary>
@@ -555,11 +555,11 @@
         </details>
         <details class="reveal">
           <summary>Do we have to be online at the same time to connect?</summary>
-          <p>Not if you use a mailbox relay. Your invite becomes a single link that stays valid for 7 days. Your friend opens it whenever they like, and the two apps connect on their own the next time you are both online - no reply code to send back. Contacts you already have reconnect with one tap. Without a relay, Veil falls back to one-time codes that work while both screens are open.</p>
+          <p>No. Your invite is a single link that stays valid for 7 days. Your friend opens it whenever they like, and the two apps find each other through public relays and connect on their own the next time you are both online - no reply code to send back. Contacts you already have reconnect with one tap. If you turn relays off, Veil falls back to one-time codes that work while both screens are open.</p>
         </details>
         <details class="reveal">
           <summary>Can I message someone who is offline?</summary>
-          <p>Yes, if they set up a mailbox relay - a tiny service anyone can run with one Docker command. Your message is encrypted with the Signal Double Ratchet (seeded from Veil's post-quantum handshake), padded, and left in their mailbox with no sender id. The relay only ever holds ciphertext and deletes it once collected. It can also wake their device with an empty push notification. Without a relay, Veil stays purely peer-to-peer.</p>
+          <p>Yes. Your message is encrypted with the Signal Double Ratchet (seeded from Veil's post-quantum handshake), padded, and published to your contact's public Nostr relays signed by a one-time key. The relays only ever hold ciphertext and drop it after 30 days. Their Veil picks it up the moment they open it. There is no push server, so a closed app shows new messages when it is next opened.</p>
         </details>
         <details class="reveal">
           <summary>How do backups work without a cloud?</summary>
@@ -577,7 +577,7 @@
       <div class="final-cta reveal">
         <img class="final-logo" src="favicon.svg" alt="" width="64" height="64">
         <h2 id="cta-title">Start a private conversation</h2>
-        <p>No sign-up. No servers. Just you, them, and strong encryption.</p>
+        <p>No sign-up. No backend. Just you, them, and strong encryption.</p>
         <div class="cta-row cta-center">
           <a class="btn btn-primary btn-lg" href="app/">Open Veil</a>
           <a class="btn btn-ghost btn-lg" href="https://github.com/dmdhrumilmistry/veil">View source</a>

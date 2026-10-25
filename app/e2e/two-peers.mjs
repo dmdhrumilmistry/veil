@@ -4,9 +4,8 @@
  * strict CSP produced no violations. Run after `npm run build`.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { startNostrRelay } from './nostr-relay.mjs';
 import { chromium } from 'playwright';
 
 const PORT = 4200 + Math.floor(Math.random() * 700);
@@ -16,22 +15,17 @@ const PASS = 'correct horse battery staple';
 
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], { stdio: 'pipe' });
 
-// A real mailbox relay for the offline-delivery scenario.
+// A local Nostr relay standing in for the public relays (CI never touches the internet).
 const RELAY_PORT = PORT + 1000;
-const relayDir = mkdtempSync(join(tmpdir(), 'veil-e2e-relay-'));
-const relayProc = spawn(process.execPath, ['../relay/src/main.ts'], { stdio: 'pipe', env: { ...process.env, PORT: String(RELAY_PORT), VEIL_RELAY_DATA: relayDir } });
-const RELAY = `http://127.0.0.1:${RELAY_PORT}`;
+const nostr = startNostrRelay(RELAY_PORT);
+// RELAY_URLS="wss://a wss://b" runs the same scenarios over real public relays instead.
+const PUBLIC = (process.env.RELAY_URLS ?? '').split(/\s+/).filter(Boolean);
+const RELAY = PUBLIC.length ? PUBLIC.join('\n') : nostr.url;
 const fail = (msg) => {
   console.error('FAIL:', msg);
   server.kill('SIGKILL');
-  relayProc.kill('SIGKILL');
   process.exit(1);
 };
-await new Promise((resolve, reject) => {
-  relayProc.stdout.on('data', (d) => String(d).includes('listening') && resolve());
-  relayProc.on('exit', () => reject(new Error('relay exited')));
-  setTimeout(() => reject(new Error('relay timeout')), 15000);
-});
 await new Promise((resolve, reject) => {
   server.stdout.on('data', (d) => String(d).includes(String(PORT)) && resolve());
   server.on('exit', () => reject(new Error('preview server exited')));
@@ -54,13 +48,34 @@ async function peer(name, viewport) {
   });
   page.on('pageerror', (e) => problems.push(`${name} pageerror: ${e.message}`));
   await page.goto(BASE);
-  await page.getByRole('button', { name: 'Get started' }).click();
+  const start = page.getByRole('button', { name: 'Get started' });
+  if (!(await start.waitFor({ timeout: 15000 }).then(() => true, () => false))) {
+    // Diagnose rather than hide: log what the page shows, then retry the load once.
+    console.warn(`WARN ${name}: app did not render in 15s; page shows: ${JSON.stringify((await page.locator('body').innerText()).slice(0, 200))}`);
+    await page.reload();
+  }
+  await start.click();
   await page.getByLabel('Display name').fill(name);
   await page.getByLabel('Passphrase', { exact: true }).fill(PASS);
   await page.getByLabel('Confirm passphrase').fill(PASS);
+  // Start peer-to-peer only; tests opt in to the local relay explicitly.
+  await page.getByRole('checkbox', { name: /^Invite links and offline messages via public relays/ }).uncheck();
   await page.getByRole('button', { name: 'Create encrypted vault' }).click();
   await page.getByRole('button', { name: 'New chat' }).waitFor({ timeout: 20000 });
   return page;
+}
+
+async function useRelay(page, { fromChat, back }) {
+  if (fromChat) await page.getByRole('button', { name: 'Back to chats' }).click();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Edit relays' }).click();
+  await page.getByLabel(/^Relays \(wss/).fill(RELAY);
+  await page.locator('#relays').getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('checkbox', { name: /^Invite links, offline messages and one-tap reconnect/ }).click();
+  await page.getByText(new RegExp(`Connected to [1-9] of ${PUBLIC.length || 1} relays`)).waitFor({ timeout: 30000 });
+  // Keep the scripted scenarios deterministic: no automatic knocking in the background.
+  await page.getByRole('checkbox', { name: /^Connect automatically/ }).uncheck();
+  if (back) await page.getByRole('button', { name: 'Back', exact: true }).click();
 }
 
 const clip = (page) => page.evaluate(() => navigator.clipboard.readText());
@@ -100,22 +115,12 @@ try {
   await bob.getByText('End-to-end encrypted', { exact: true }).waitFor({ timeout: 20000 });
   console.log('connected + handshake verified');
 
-  // Both set up a mailbox while connected, so the cards travel over the live session.
-  const setupMailbox = async (page, mobile) => {
-    if (mobile) await page.getByRole('button', { name: 'Back to chats' }).click();
-    await page.getByRole('button', { name: 'Settings' }).click();
-    await page.getByLabel('Relay address').fill(RELAY);
-    await page.getByRole('button', { name: 'Set up' }).click();
-    await page.getByText(`Mailbox on 127.0.0.1:${RELAY_PORT}`).waitFor({ timeout: 15000 });
-    // Keep the scripted scenarios deterministic: no automatic knocking in the background.
-    await page.getByRole('checkbox', { name: /^Connect automatically/ }).uncheck();
-    if (mobile) await page.getByRole('button', { name: 'Back', exact: true }).click();
-  };
-  await setupMailbox(alice, false);
-  await setupMailbox(bob, true);
+  // Both point Veil at the (local) relay while connected, so mailbox cards travel live.
+  await useRelay(alice, { fromChat: false, back: false });
+  await useRelay(bob, { fromChat: true, back: true });
   await alice.getByRole('button', { name: /Bob/ }).first().click();
   await bob.getByRole('button', { name: /Alice/ }).first().click();
-  console.log('mailboxes set up on a local relay');
+  console.log('relay transport enabled (local Nostr relay)');
 
   // Messages both ways.
   await alice.getByLabel('Message', { exact: true }).fill('Hello Bob, this never touches a server');
@@ -275,13 +280,16 @@ try {
   await alice.getByText('Bob is offline').waitFor();
   await alice.getByLabel('Message', { exact: true }).fill('sent while you were away');
   await alice.keyboard.press('Enter');
-  await alice.getByLabel('Waiting in their mailbox').last().waitFor({ timeout: 15000 });
-  const relayFiles = ['relay.db', 'relay.db-wal'].map((f) => { try { return readFileSync(join(relayDir, f)); } catch { return Buffer.alloc(0); } });
-  if (relayFiles.some((b) => b.includes(Buffer.from('sent while you were away')))) fail('plaintext on the relay');
+  // Queued on the relay (or already delivered: relay subscriptions are instant).
+  await alice.locator('.msg.out', { hasText: 'sent while you were away' }).locator('.status.queued, .status.delivered, .status.read').waitFor({ timeout: 15000 });
+  // Everything the relay holds: random signer keys, an opaque mailbox key, padded ciphertext.
+  const relayBytes = PUBLIC.length ? Buffer.alloc(0) : Buffer.concat(nostr.events.map((e) => Buffer.concat([Buffer.from(JSON.stringify(e)), Buffer.from(e.content, 'base64url')])));
+  if (['sent while you were away', 'Alice', 'Bob'].some((w) => relayBytes.includes(Buffer.from(w)))) fail('plaintext on the relay');
+  if (!PUBLIC.length && new Set(nostr.events.map((e) => e.pubkey)).size !== nostr.events.length) fail('relay events share a signing key (sender linkable)');
   await shot(alice, 'offline-queued.png');
-  // Bob comes back: Veil checks the mailbox when it becomes visible.
+  // Bob comes back to the conversation.
   const wake = (page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-  // Mail may land just after a check; keep nudging (as the 30 s poll / push would) until it shows.
+  // Wait for relay delivery (instant while subscribed; the nudge is harmless).
   const arrives = async (page, locator, ms = 20000) => {
     const end = Date.now() + ms;
     while (Date.now() < end) {
@@ -299,22 +307,22 @@ try {
   // ...and Bob can reply while Alice is "away" too.
   await bob.getByLabel('Message', { exact: true }).fill('got it, replying offline');
   await bob.keyboard.press('Enter');
-  await bob.getByLabel('Waiting in their mailbox').last().waitFor({ timeout: 15000 });
+  await bob.locator('.msg.out', { hasText: 'got it, replying offline' }).locator('.status.queued, .status.delivered, .status.read').waitFor({ timeout: 15000 });
   await arrives(alice, alice.locator('p.text', { hasText: 'got it, replying offline' }));
-  console.log('offline messages via mailbox ok (queued, delivered, read receipt, reply; relay saw only ciphertext)');
+  console.log(PUBLIC.length ? `offline messages via public relays ok (${PUBLIC.join(', ')})` : `offline messages via relay ok (queued, delivered, read receipt, reply; relay held ${nostr.events.length} events: ciphertext only, unlinkable signers)`);
 
   // One-tap reconnect through the mailboxes: no codes. Bob is looking at Alice's chat.
   await alice.getByRole('button', { name: 'Connect', exact: true }).click();
   await arrives(bob, bob.getByText('End-to-end encrypted', { exact: true }), 30000);
   await arrives(alice, alice.getByText('End-to-end encrypted', { exact: true }), 30000);
-  console.log('one-tap reconnect via mailbox ok (no codes)');
+  console.log('one-tap reconnect via relay ok (no codes)');
 
   // Invite link: Alice shares a link and goes away; Dave (no mailbox) accepts it later.
   await alice.getByRole('button', { name: 'New chat' }).click();
   await alice.getByText('Your invite link is ready').waitFor();
   await alice.getByRole('button', { name: 'Copy link' }).click();
   const inviteLink = await clip(alice);
-  if (!inviteLink.includes('#VEIL2I.')) fail(`unexpected invite link ${inviteLink.slice(0, 60)}`);
+  if (!inviteLink.includes('#VEIL3I.')) fail(`unexpected invite link ${inviteLink.slice(0, 60)}`);
   console.log(`invite link: ${inviteLink.length} chars`);
   await shot(alice, 'invite-link.png');
   await alice.getByRole('button', { name: 'Done' }).click();
@@ -322,6 +330,7 @@ try {
   await alice.getByRole('heading', { name: 'Veil is locked' }).waitFor();
 
   const dave = await peer('Dave', { width: 390, height: 844 });
+  await useRelay(dave, { fromChat: false, back: true });
   await dave.goto(inviteLink);
   await dave.getByRole('heading', { name: 'Alice invited you to chat' }).waitFor({ timeout: 15000 });
   await shot(dave, 'invite-confirm.png');
@@ -337,7 +346,7 @@ try {
   await dave.keyboard.press('Enter');
   await alice.getByRole('button', { name: /Dave/ }).first().click();
   await alice.locator('p.text', { hasText: 'joined from a link, no codes' }).waitFor({ timeout: 15000 });
-  console.log('invite link ok (inviter offline at join time, joiner without mailbox, auto-connect on return)');
+  console.log('invite link ok (inviter offline at join time, auto-connect on return)');
 
   // Data at rest must not contain plaintext.
   const leaked = await alice.evaluate(async () => {
@@ -360,10 +369,13 @@ try {
   console.log("\nE2E PASSED");
 } catch (e) {
   console.error(problems.join('\n'));
+  for (const ctx of browser.contexts()) {
+    for (const pg of ctx.pages()) console.error(`page ${pg.url().slice(0, 40)} shows: ${JSON.stringify((await pg.locator('body').innerText().catch(() => '')).slice(0, 400))}`);
+  }
   fail(e.stack || e.message);
 } finally {
   server.kill('SIGKILL');
-  relayProc.kill('SIGKILL');
+  await nostr.close();
   await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 3000))]);
 }
 process.exit(0);

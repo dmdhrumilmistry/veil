@@ -2,7 +2,7 @@
 
 ## Goals
 
-1. **No servers required.** Live messages, files and keys go device to device. Veil operates no infrastructure. The only optional server is a user-chosen mailbox relay for offline messages, and it is designed to learn as little as possible (see below).
+1. **No servers of our own.** Live messages, files and keys go device to device. Veil operates no infrastructure. For invite links and offline messages it can use existing **public Nostr relays** as untrusted pipes for end-to-end encrypted, padded, sender-unlinkable blobs. Users can switch that off and stay purely peer-to-peer.
 2. **Defense in depth.** Do not rely on one layer (DTLS) alone. Authenticate everything. Fail closed.
 3. **Small, auditable crypto surface.** Every primitive goes through `app/src/crypto/primitives.ts`. Only WebCrypto and the audited `@noble` libraries are used.
 4. **Works everywhere a modern browser runs.** Installable PWA, offline app shell, responsive from 320 px phones to 4K.
@@ -114,58 +114,69 @@ chunks/<HMAC(file)>/<index>    sealed 1 MiB file block
 
 Every record has a fresh 96-bit IV and uses its slot name as AAD, so records cannot be swapped. Changing the passphrase re-wraps the master key without re-encrypting data. Locking (manual, idle timeout, or `pagehide`) closes sessions, drops all keys and revokes object URLs.
 
-## Offline messages
+## Offline messages over public Nostr relays
 
 ```
- Alice (offline-capable contact)                 Bob's mailbox relay                Bob
- ─────────────────────────────                   ──────────────────                 ───
- DR-encrypt(msg) → envelope (padded, no id) ──►  POST /v1/send/{sid}  ──empty push──►  service worker
-                                                 stores ciphertext                     "You have new messages"
-                                                 GET /v1/recv/{rid} (signed) ◄──────── Veil opens, fetches,
-                                                 ack → deleted                         trial-decrypts, DR-decrypts
+ Alice                                   public relays (nos.lol, primal, ...)            Bob
+ ─────                                   ─────────────────────────────────            ───
+ DR-encrypt(msg) → padded envelope
+ → gift wrap: kind 1059, throwaway key,  ──►  stores event until it expires   ──►  live subscription
+   ["p", Bob's mailbox key], expiry           (sees ciphertext only)               (#p = his mailbox key)
+                                                                                    trial-decrypts, DR-decrypts
 ```
+
+**Mailbox key:** every user gets a random secp256k1 key at first unlock. It is unrelated to the identity key and is only shared with contacts. The relays a user reads are listed in Settings, 4 defaults and up to 6, `wss://` only.
 
 **Setup (during any live session):**
 1. The handshake HKDF output is extended by 32 bytes: `asyncRoot`. This is prefix-compatible, so the existing chain keys are unchanged.
 2. Both sides derive `SK = HKDF(asyncRoot, "veil/v1/ratchet/sk")` and `envKey = HKDF(asyncRoot, "veil/v1/mailbox/env")`. `asyncRoot` is then wiped.
-3. The responder sends `ratchet-init { pub }` (a fresh X25519 ratchet key). The initiator runs `RatchetInitAlice(SK, pub)` and answers `ratchet-hello` with a ratchet message. The responder runs `RatchetInitBob`. Both now hold a Double Ratchet with associated data `veil/v1/ratchet/ad || id_I || id_R`.
-4. Each side that has a mailbox sends `mailbox { relay, sid }`.
+3. The responder sends `ratchet-init { pub }`. The initiator runs `RatchetInitAlice(SK, pub)` and answers `ratchet-hello`. The responder runs `RatchetInitBob`. Associated data is `veil/v1/ratchet/ad || id_I || id_R`.
+4. Each side sends its mailbox card `{ pk, relays }`.
 
-Every live session re-seeds a new **epoch**. The previous epoch is kept so mail already in flight still decrypts (2 epochs max).
+Every live session re-seeds a new **epoch**. The previous epoch is kept so messages already in flight still decrypt (2 epochs max).
 
-**Sending while the contact is offline:** `msg`, `receipt`, `profile`, `disappear` and `mailbox` messages are encrypted with the newest epoch's ratchet. The state is persisted *before* upload. The result is sealed in an envelope: `iv || AES-256-GCM(envKey, pad(len || dr_message))`, padded to 1/4/16/64 KiB buckets. If the relay is unreachable, the envelope waits in an encrypted outbox and is retried. Files, typing indicators and file control always need a live session.
+**Sending while the contact is offline:**
+- **What can go offline:** `msg`, `receipt`, `profile`, `disappear`, `mailbox` and `rtc` messages.
+- **Encryption and wrapping:** the message is encrypted with the newest epoch's ratchet, and the state is persisted *before* publishing. It is sealed in a padded envelope (`iv || AES-256-GCM(envKey, pad(len || dr_message))`, buckets of 1/4/16/48 KiB), base64url-encoded into a NIP-59-style gift wrap and published to the contact's relays.
+- **Wrapper:** kind 1059, signed by a fresh random key per event, `["p", recipient mailbox key]`, NIP-40 `expiration` (30 days for mail, 1 hour for signaling), with `created_at` randomly backdated by up to 60 seconds.
+- **If no relay accepts it,** the signed event waits in an encrypted outbox and is re-published unchanged. The same id means receivers never see duplicates.
+- **Files and typing indicators** always need a live session.
 
-**Receiving:** Veil polls on unlock, every 30 s while visible, on `online`, and when a push arrives. Envelopes have no sender id, so each one is trial-decrypted against every contact's envelope keys (cheap AES-GCM), then decrypted by that contact's ratchet and acknowledged so the relay deletes it.
+**Receiving:**
+- One WebSocket subscription per relay (`{ kinds: [1059], "#p": [myPk], since }`) delivers events in real time while Veil is open, and catches up on unlock.
+- Events are signature-checked, deduplicated across relays, and remembered (the last 3,000 ids, persisted) so relays replaying history cost nothing.
+- Envelopes have no sender id, so they are trial-decrypted against each contact's envelope keys, then pending invite channels, then active invites.
 
-**Properties:**
-- Content, sender identity, ratchet headers and counters are hidden from the relay. It sees an anonymous queue, padded sizes, timing and client IPs.
-- The ratchet root starts from the hybrid X25519 + ML-KEM-768 secret, so recorded offline traffic stays protected against a future quantum attacker. Per-message keys give forward secrecy, and DH ratchet steps give break-in recovery (classical). Each live session reseeds with fresh post-quantum material.
-- Ratchet state and mailbox credentials are **never** written to backups. Restoring an old ratchet would reuse keys. A restored device re-establishes offline messaging at the next live connection.
-- Peers can only point us at `https://` relays (no localhost unless the app itself runs locally), and the relay only accepts push endpoints from known push services, so neither side can be used for SSRF.
+**What relays learn:**
+- Relays see an opaque mailbox key receiving padded blobs from unlinkable throwaway keys, plus timing and IP addresses.
+- They never see content, sender identity, ratchet headers, counters, contact lists or names.
+- Ciphertext may outlive its expiry on relays that ignore NIP-40, but per-message ratchet keys are deleted after use, so old ciphertext stays useless.
 
-**Relay design:** see [relay/README.md](../relay/README.md). It uses unlinkable `rid`/`sid` capabilities, Ed25519-signed owner requests with a 5-minute window, per-IP in-memory rate limits, quotas, a 30-day TTL, `secure_delete`, no logs, a non-root read-only container, and zero npm runtime dependencies.
+**Never in backups:** ratchet state and the mailbox key. Restoring an old ratchet would reuse keys. A restored device gets a new mailbox key and re-establishes offline messaging at the next live connection.
+
+**Validation:** peers can only point us at `wss://` relays (`ws://localhost` only when the app itself runs locally), at most 6, and mailbox keys must be 32-byte hex. Publishing to a contact's relays uses temporary, publish-only connections that never subscribe, so our own mailbox key is not revealed there.
 
 ## Invite links and one-tap reconnect (rendezvous)
 
-Manual codes are WebRTC offers tied to a live `RTCPeerConnection`, so they die when the inviter's tab closes or locks, and both people must be online together. With a mailbox, Veil uses the relay as a **rendezvous** for signaling instead.
+Manual codes are WebRTC offers tied to a live `RTCPeerConnection`, so they die when the inviter's tab closes or locks, and both people must be online together. With public relays on (the default), signaling travels through them instead.
 
-**Invite links (v2):** `#VEIL2I.<deflate(JSON{ v:2, id, name, relay, sid, ik, tok, iid, exp })>`, about 340 characters.
-- `ik` is an X25519 key made for this invite. `tok` is a 128-bit secret, and `exp` defaults to 7 days (1 to 30 configurable). The inviter keeps `ik`'s private key and `tok` in the vault and can revoke them.
-- The joiner seals a `join` note: `epk || envelope(k_join, { iid, tok, id, name, reply, aid, ts })` with `(k_join || k_chan) = HKDF(X25519(epk, ik), salt = iid, "veil/v1/invite")`. A joiner without a mailbox creates a temporary reply queue on the inviter's relay, deleted after they meet.
-- The inviter trial-decrypts unknown mail against its active invites. It checks `tok` in constant time and **claims** the invite for the first joiner's identity (single use), then starts signaling over `k_chan`.
+**Invite links (v3):** `#VEIL3I.<deflate(JSON{ v:3, id, name, mb, rl, ik, tok, iid, exp })>`, about 370 characters.
+- `mb`/`rl` are the inviter's mailbox key and relays. `ik` is an X25519 key made for this invite, and `tok` is a 128-bit secret.
+- `exp` defaults to 7 days (1 to 30 configurable). The inviter keeps `ik`'s private key and `tok` in the vault and can revoke them.
+- The joiner publishes a sealed `join` note to the inviter's mailbox: `epk || envelope(k_join, { iid, tok, id, name, reply: joiner's card, aid, ts })` with `(k_join || k_chan) = HKDF(X25519(epk, ik), salt = iid, "veil/v1/invite")`.
+- The inviter checks `tok` in constant time, **claims** the invite for the first joiner's identity (single use), and starts signaling over `k_chan`.
+- Links from v0.7 (`VEIL2I`, self-hosted relay) are rejected with a clear message.
 
 **Signaling:** three messages, `{ t: "rtc", k: "knock" | "offer" | "answer", aid, ts, sdp? }`.
 - Between contacts they travel **inside the Double Ratchet**, so they are authenticated as that contact. Over an invite they are sealed with `k_chan`.
 - Knocks are valid for 3 minutes and offers for 90 seconds. A stale offer makes the side that still wants to connect knock again, so the devices meet whenever both are online.
 - Glare (both knock or both offer) is resolved by identity order: the smaller key offers.
-- While an attempt is in progress, the app polls its queues every 2 seconds (otherwise every 30 seconds, plus on push and on resume).
+- Relay subscriptions are live, so the whole exchange usually completes in a second or two.
 - The resulting live session runs the normal hybrid post-quantum handshake with `expectedPeer` pinned to the identity from the invite or contact. A relay that tampers with signaling only causes a failed connection.
 
 **Auto-connect (setting, on by default):** opening a chat with an offline contact sends one knock (at most every 5 minutes), and incoming knocks are answered automatically. Turning it off stops your device from revealing that you are online. Knocks are then answered only while you have that chat open, and otherwise logged as "tried to connect".
 
-**Manual codes are still there** (no mailbox, or both people together). They no longer auto-lock while waiting, hold a screen wake lock, and expire explicitly after 15 minutes with a clear message, instead of failing silently.
-
-**Default relay:** builds can embed `VITE_DEFAULT_RELAY` (from the `VEIL_DEFAULT_RELAY` repository variable in CI). New users are offered it during onboarding as an opt-in, and the invite sheet offers one-tap setup.
+**Manual codes are still there** (relays off, or both people together). They no longer auto-lock while waiting, hold a screen wake lock, and expire explicitly after 15 minutes with a clear message.
 
 ## Encrypted backups
 
@@ -193,7 +204,7 @@ types     = 0x01 JSON entry { k, d } | 0x02 file chunk (fileId, index, bytes) | 
 
 ## Notifications
 
-Veil has no push server, and Web Push would need one: a server holding your push subscription and waking your device, which reveals when you get messages. So notifications are **local**. The running app raises them when a message, file or new connection arrives on a live session while Veil is not in front. That covers the cases that matter: if Veil is fully closed there is no connection, so nobody can message you.
+Web Push would need a server we run, holding your push subscription and waking your device, which also reveals when you get messages. Veil has none, so notifications are **local**. The running app raises them when a message, file or connection arrives while Veil is in the background. That includes offline mail arriving over the live relay subscription. Messages sent while Veil is fully closed wait on the relays and show up the next time you open it.
 
 - Shown through the service worker (`registration.showNotification`). Android browsers and installed iOS apps reject `new Notification()`. On iOS/iPadOS, notifications require Veil to be added to the Home Screen.
 - **Never** includes message text. The sender's name is opt-in (`Show who it is from`), since it appears on lock screens.
@@ -205,8 +216,8 @@ Veil has no push server, and Web Push would need one: a server holding your push
 
 ## Web platform hardening
 
-- CSP (meta tag, since GitHub Pages cannot set headers): `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types veil-sw`.
-- `connect-src` allows `https:` because users choose their own mailbox relay. Script execution stays locked to `'self'` with Trusted Types, so this does not widen what code can run.
+- CSP (meta tag, since GitHub Pages cannot set headers): `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' wss: ws://localhost:* ws://127.0.0.1:*; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; require-trusted-types-for 'script'; trusted-types veil-sw`.
+- `connect-src` allows `wss:` because users choose their public relays. No `https:` or other origins are reachable. Script execution stays locked to `'self'` with Trusted Types, so this does not widen what code can run.
 - One Trusted Types policy, which only allows the service worker URL `./sw.js`.
 - `referrer: no-referrer`. No external fonts, images or scripts.
 - The service worker caches only same-origin GET requests for the app shell. Navigation is network-first so updates land quickly.
@@ -215,14 +226,23 @@ Veil has no push server, and Web Push would need one: a server holding your push
 ## Testing
 
 - `app/test/crypto.test.ts` covers handshake correctness, DTLS-fingerprint MITM detection, identity pinning, tampered hello, forged FIN, version and junk rejection, chain replay/reorder/tamper/cross-channel rejection, and safety number symmetry.
-- `app/e2e/two-peers.mjs` covers two isolated browser profiles, onboarding, copy/paste signaling, a real WebRTC connection, messages and read receipts, a multi-MB file with a byte-exact download, matching safety numbers, lock/unlock with a wrong passphrase, a scan of IndexedDB for plaintext, and zero console or CSP errors.
+- `app/test/ratchet.test.ts`, `invite.test.ts`, `nostr.test.ts` and `backup.test.ts` cover the Double Ratchet (out-of-order, replay, tamper, skip limits, persistence), invite sealing and claiming, Nostr event signing and verification, relay URL rules, and the backup format.
+- `app/e2e/two-peers.mjs` covers four isolated browser profiles and an in-process Nostr relay:
+  - onboarding, copy/paste signaling and a real WebRTC connection
+  - messages and read receipts, and notifications
+  - a multi-MB file with a byte-exact download
+  - matching safety numbers, and lock/unlock with a wrong passphrase
+  - backup and restore onto a new device, and single-window handover
+  - offline messages with receipts and replies, one-tap reconnect, and an invite link accepted while the inviter was offline
+  - scans of IndexedDB and the relay for plaintext, a check that every relay event has its own signing key, and zero console or CSP errors
+- `npm run test:e2e:public` runs the same scenarios over real public relays. It is manual, not part of CI.
 
 ## Roadmap ideas
 
 - Voice and video calls (renegotiated over the existing authenticated channel)
-- Offline file delivery through the mailbox (chunked, size-capped)
+- Offline delivery of small files over relays (chunked, size-capped)
+- Optional Tor / proxy support for relay connections to hide IP addresses from relays
 - Post-quantum ratchet steps (SPQR-style ML-KEM ratchet) for post-compromise security against quantum attackers
 - Group chats (pairwise sessions or MLS)
 - Resumable transfers
 - Encrypted backup/export between your own devices
-- Optional self-hostable rendezvous for one-tap reconnects (it would only ever see encrypted, signed signaling blobs)

@@ -1,7 +1,7 @@
 {
   "name": "veil-app",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "Veil - private peer-to-peer end-to-end encrypted chat and file sharing",
   "license": "MIT",
@@ -11,12 +11,14 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "node e2e/two-peers.mjs"
+    "test:e2e": "node e2e/two-peers.mjs",
+    "test:e2e:public": "RELAY_URLS=\"wss://nos.lol wss://relay.primal.net wss://nostr.mom\" node e2e/two-peers.mjs"
   },
   "engines": {
     "node": ">=20.19"
   },
   "dependencies": {
+    "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@noble/post-quantum": "0.7.1",
     "preact": "10.29.8",
@@ -27,6 +29,7 @@
     "playwright": "1.64.1",
     "typescript": "5.9.3",
     "vite": "8.3.5",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "ws": "8.22.0"
   }
 }

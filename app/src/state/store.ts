@@ -63,9 +63,8 @@ export interface AppState {
   updateReady?: boolean;
   /** Contacts we can message while they are offline (mailbox + ratchet ready). */
   offline: Record<string, boolean>;
-  /** Our own mailbox, if set up. */
-  mailbox?: { relay: string; push: boolean };
-  mailboxError?: string;
+  /** Connection state of each public relay we read from. */
+  relayStatus: { url: string; state: 'connecting' | 'open' | 'closed' }[];
   /** Active invite links we created. */
   invites: InviteSummary[];
 }
@@ -87,6 +86,7 @@ class Store {
     progress: {},
     offline: {},
     invites: [],
+    relayStatus: [],
     view: 'chats',
   };
   private listeners = new Set<Listener>();

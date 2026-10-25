@@ -21,7 +21,7 @@ import { MIN_PASSPHRASE, strength } from './passphrase';
 import { Icon, Logo, type IconName } from './icons';
 import { InstallCard } from './Install';
 import { BackupCard } from './Backup';
-import { MailboxCard } from './Mailbox';
+import { RelaysCard } from './Mailbox';
 import { notifyPermission, requestNotifyPermission, type NotifyPermission } from '../state/notify';
 import { Qr } from './Qr';
 
@@ -64,9 +64,9 @@ export function ContactInfo({ contact }: { contact: Contact }) {
               <Icon name={contact.verified ? 'shieldCheck' : 'shield'} size={16} />
               {contact.verified ? 'Verified' : 'Not verified'}
             </span>
-            <span class={`verify-chip ${offline[contact.id] ? 'ok' : ''}`} title={contact.mailbox ? `Mailbox on ${new URL(contact.mailbox.relay).host}` : 'They have no mailbox relay'}>
+            <span class={`verify-chip ${offline[contact.id] ? 'ok' : ''}`} title={contact.mailbox ? `Reads ${contact.mailbox.relays.length} public relays` : 'They have public relays turned off'}>
               <Icon name="mail" size={16} />
-              {offline[contact.id] ? 'Offline messages on' : contact.mailbox ? 'Connect once to enable offline messages' : 'No offline mailbox'}
+              {offline[contact.id] ? 'Offline messages on' : contact.mailbox ? 'Connect once to enable offline messages' : 'Live only'}
             </span>
           </div>
         </div>
@@ -203,8 +203,8 @@ function NotificationsCard() {
 }
 
 function InvitesCard() {
-  const { invites, settings, mailbox } = useApp();
-  if (!mailbox) return null;
+  const { invites, settings } = useApp();
+  if (!settings.useRelays) return null;
   const left = (t: number) => {
     const d = Math.ceil((t - Date.now()) / 86_400_000);
     return d <= 1 ? 'expires within a day' : `expires in ${d} days`;
@@ -297,7 +297,7 @@ export function SettingsPanel() {
 
         <BackupCard />
 
-        <MailboxCard />
+        <RelaysCard />
 
         <InvitesCard />
 

@@ -367,6 +367,8 @@ export function Chat({ contact }: { contact: Contact }) {
   useEffect(() => {
     stick.current = true;
     setUnseen(0);
+    // Coming back to the conversation (e.g. from contact info) counts as reading it.
+    void markRead(contact.id);
     const onVis = () => void markRead(contact.id);
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);

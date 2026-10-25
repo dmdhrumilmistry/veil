@@ -2409,3 +2409,41 @@ dialog.lightbox img {
 .code-actions.single {
   grid-template-columns: 1fr;
 }
+
+/* Relay status */
+.relay-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.relay-list li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 13.5px;
+}
+.relay-list .grow {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.dot.open {
+  background: var(--success);
+}
+.dot.connecting {
+  background: var(--warn);
+  animation: blink 1.2s infinite;
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { acceptInvite, closeConnect, createInvite, createInviteLink, DEFAULT_RELAY, openCode, setupMailbox, startJoin, submitAnswer } from '../state/app';
+import { acceptInvite, closeConnect, createInvite, createInviteLink, openCode, setRelaysEnabled, startJoin, submitAnswer } from '../state/app';
 import { toast, useApp, type ConnectFlow } from '../state/store';
 import { Icon } from './icons';
 import { Qr } from './Qr';
@@ -159,23 +159,18 @@ function expiresIn(ts?: number) {
 
 /** Shown in the live-code flow when there is no mailbox yet: the way out of copy-paste. */
 function MailboxNudge() {
-  const { mailbox } = useApp();
+  const { settings } = useApp();
   const [busy, setBusy] = useState(false);
-  if (mailbox) return null;
-  const host = DEFAULT_RELAY ? new URL(DEFAULT_RELAY).host : '';
+  if (settings.useRelays) return null;
   return (
     <div class="nudge">
-      <Icon name="mail" size={18} />
+      <Icon name="link" size={18} />
       <div class="grow">
-        <b>Skip the codes next time</b>
-        <p>With a mailbox, invites become a single link that works for days - no need to be online together or send anything back.</p>
-        {DEFAULT_RELAY ? (
-          <button class="btn primary sm" disabled={busy} onClick={() => { setBusy(true); void setupMailbox(DEFAULT_RELAY!).then(() => createInviteLink()).catch((e) => toast((e as Error).message, 'error')).finally(() => setBusy(false)); }}>
-            {busy ? 'Setting up...' : `Use ${host} and get a link`}
-          </button>
-        ) : (
-          <a class="link-btn left" href="#mailbox" onClick={(e) => { e.preventDefault(); closeConnect(); document.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click(); }}>Set up a mailbox in Settings</a>
-        )}
+        <b>Skip the codes</b>
+        <p>Turn on public relays and invites become a single link that works for days - no need to be online together or send anything back. Relays only ever carry encrypted data.</p>
+        <button class="btn primary sm" disabled={busy} onClick={() => { setBusy(true); void setRelaysEnabled(true).then(() => createInviteLink()).catch((e: Error) => toast(e.message, 'error')).finally(() => setBusy(false)); }}>
+          {busy ? 'Turning on...' : 'Turn on and get a link'}
+        </button>
       </div>
     </div>
   );
@@ -278,7 +273,7 @@ function ErrorState({ error, retry }: { error?: string; retry: () => void }) {
 }
 
 export function ConnectSheet() {
-  const { connect, mailbox } = useApp();
+  const { connect, settings } = useApp();
   if (!connect) return null;
   const title =
     connect.mode === 'invite' ? (connect.forContact ? 'Reconnect' : 'Invite someone') : connect.step === 'confirm' || connect.step === 'requested' ? 'Invitation' : 'Join with an invite';
@@ -288,7 +283,7 @@ export function ConnectSheet() {
       {tabs && (
         <div class="seg" role="tablist">
           <button role="tab" aria-selected={connect.mode === 'invite'} class={connect.mode === 'invite' ? 'on' : ''} onClick={() => connect.mode !== 'invite' && void createInvite()}>
-            <Icon name="qr" size={16} /> {mailbox ? 'Invite link' : 'Create invite'}
+            <Icon name="qr" size={16} /> {settings.useRelays ? 'Invite link' : 'Create invite'}
           </button>
           <button role="tab" aria-selected={connect.mode === 'join'} class={connect.mode === 'join' ? 'on' : ''} onClick={() => connect.mode !== 'join' && startJoin()}>
             <Icon name="link" size={16} /> I have a link

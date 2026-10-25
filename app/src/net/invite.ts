@@ -1,37 +1,39 @@
 import { concat, ctEqual, fromB64u, fromUtf8, randomBytes, toB64u, utf8, wipe } from '../crypto/encoding';
 import { aesKey, exportRaw, hkdf, x25519, x25519Generate, type Bytes } from '../crypto/primitives';
-import { openEnvelope, sealEnvelope } from './mailbox';
+import { openEnvelope, sealEnvelope, type MailboxCard } from './mailbox';
+import { isHexKey, MAX_RELAYS, normalizeRelay } from './nostr';
 
 /**
- * Invite links (v2): long-lived, single-use, no reply code.
+ * Invite links (v3): long-lived, single-use, no reply code, no server of our own.
  *
- *   link   = .../app/#VEIL2I.<base64url(deflate(JSON invite))>
- *   invite = { v: 2, id, name, relay, sid, ik, tok, iid, exp }
+ *   link   = .../app/#VEIL3I.<base64url(deflate(JSON invite))>
+ *   invite = { v: 3, id, name, mb, rl, ik, tok, iid, exp }
+ *            mb/rl = the inviter's Nostr mailbox key and the public relays it reads
  *
  * `ik` is an X25519 key created for this invite only. A joiner seals a `join` note to it:
  *
  *   join envelope = epk(32) || envelope(k_join, { t: "join", iid, tok, id, name, reply, aid, ts })
  *   (k_join || k_chan) = HKDF-SHA-256(X25519(epk, ik), salt = iid, info = "veil/v1/invite")
  *
- * Only the inviter (holding ik's private key) can open it, and the relay sees padded
- * ciphertext with no sender id. `k_chan` then protects the WebRTC signaling messages
- * both apps exchange through the relay until the live, post-quantum handshake (pinned
+ * Only the inviter (holding ik's private key) can open it, and relays see padded
+ * ciphertext signed by a throwaway key. `k_chan` then protects the WebRTC signaling
+ * messages both apps exchange through public relays until the live, post-quantum handshake (pinned
  * to the identities named here) takes over.
  */
 
-export const INVITE_PREFIX = 'VEIL2I.';
+export const INVITE_PREFIX = 'VEIL3I.';
 const INFO = utf8('veil/v1/invite');
 const MAX_CODE = 4096;
 
-export interface InviteV2 {
-  v: 2;
+export interface InviteV3 {
+  v: 3;
   /** Inviter identity public key (base64url). */
   id: string;
   /** Inviter display name hint (untrusted). */
   name: string;
-  /** Inviter mailbox relay + send capability. */
-  relay: string;
-  sid: string;
+  /** Inviter mailbox: Nostr public key (hex) and relays. */
+  mb: string;
+  rl: string[];
   /** Per-invite X25519 public key. */
   ik: string;
   /** Per-invite secret proving the joiner really holds this link. */
@@ -56,12 +58,12 @@ async function pipe(data: Uint8Array, stream: CompressionStream | DecompressionS
   return concat(...parts);
 }
 
-export async function encodeInvite(inv: InviteV2): Promise<string> {
+export async function encodeInvite(inv: InviteV3): Promise<string> {
   return INVITE_PREFIX + toB64u(await pipe(utf8(JSON.stringify(inv)), new CompressionStream('deflate-raw')));
 }
 
 export function extractInvite(text: string): string | undefined {
-  return text.match(/VEIL2I\.[A-Za-z0-9_-]+/)?.[0];
+  return text.match(/VEIL[23]I\.[A-Za-z0-9_-]+/)?.[0];
 }
 
 const isB64 = (s: unknown, bytes: number) => {
@@ -73,29 +75,32 @@ const isB64 = (s: unknown, bytes: number) => {
   }
 };
 
-export async function decodeInvite(text: string): Promise<InviteV2> {
+/** Validates a mailbox card received from someone else. */
+export function parseCard(pk: unknown, relays: unknown, allowLocal: boolean): MailboxCard | undefined {
+  if (!isHexKey(pk) || !Array.isArray(relays)) return undefined;
+  try {
+    const rl = [...new Set(relays.slice(0, MAX_RELAYS).map((r) => normalizeRelay(String(r), allowLocal)))];
+    return rl.length ? { pk, relays: rl } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function decodeInvite(text: string, allowLocal = false): Promise<InviteV3> {
   const code = extractInvite(text);
   if (!code || code.length > MAX_CODE) throw new Error('That does not look like a Veil invite');
-  let j: Partial<InviteV2>;
+  if (code.startsWith('VEIL2I.')) throw new Error('This invite is from an older version of Veil. Ask for a new link.');
+  let j: Partial<InviteV3>;
   try {
     j = JSON.parse(fromUtf8(await pipe(fromB64u(code.slice(INVITE_PREFIX.length)), new DecompressionStream('deflate-raw'))));
   } catch {
     throw new Error('This invite link is damaged - ask for a new one');
   }
-  if (
-    j.v !== 2 ||
-    !isB64(j.id, 32) ||
-    !isB64(j.ik, 32) ||
-    !isB64(j.tok, 16) ||
-    !isB64(j.iid, 16) ||
-    typeof j.relay !== 'string' ||
-    typeof j.sid !== 'string' ||
-    !/^[A-Za-z0-9_-]{22}$/.test(j.sid) ||
-    typeof j.exp !== 'number'
-  ) {
+  const card = parseCard(j.mb, j.rl, allowLocal);
+  if (j.v !== 3 || !isB64(j.id, 32) || !isB64(j.ik, 32) || !isB64(j.tok, 16) || !isB64(j.iid, 16) || !card || typeof j.exp !== 'number') {
     throw new Error('Unsupported or invalid Veil invite');
   }
-  return { v: 2, id: j.id!, name: typeof j.name === 'string' ? j.name.slice(0, 48) : '', relay: j.relay, sid: j.sid, ik: j.ik!, tok: j.tok!, iid: j.iid!, exp: j.exp };
+  return { v: 3, id: j.id!, name: typeof j.name === 'string' ? j.name.slice(0, 48) : '', mb: card.pk, rl: card.relays, ik: j.ik!, tok: j.tok!, iid: j.iid!, exp: j.exp };
 }
 
 /** Everything the inviter keeps locally for one invite. */
@@ -137,13 +142,13 @@ export interface JoinNote {
   tok: string;
   id: string;
   name: string;
-  reply: { relay: string; sid: string };
+  reply: MailboxCard;
   aid: string;
   ts: number;
 }
 
 /** Joiner: seal a join note to the invite key. Returns the envelope and the channel key. */
-export async function sealJoin(inv: InviteV2, note: JoinNote): Promise<{ envelope: Bytes; chan: Bytes }> {
+export async function sealJoin(inv: InviteV3, note: JoinNote): Promise<{ envelope: Bytes; chan: Bytes }> {
   const eph = await x25519Generate();
   const epk = await exportRaw(eph.publicKey);
   const { join, chan } = await split(await x25519(eph.privateKey, fromB64u(inv.ik)), inv.iid);
@@ -170,6 +175,6 @@ export async function openJoin(secret: InviteSecret, envelope: Uint8Array): Prom
     return undefined;
   }
   if (note?.t !== 'join' || note.iid !== secret.iid || typeof note.tok !== 'string' || !ctEqual(utf8(note.tok), utf8(secret.tok))) return undefined;
-  if (!isB64(note.id, 32) || typeof note.reply?.relay !== 'string' || typeof note.reply?.sid !== 'string' || typeof note.aid !== 'string') return undefined;
+  if (!isB64(note.id, 32) || !isHexKey(note.reply?.pk) || !Array.isArray(note.reply?.relays) || typeof note.aid !== 'string') return undefined;
   return { note, chan };
 }

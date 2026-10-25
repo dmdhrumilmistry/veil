@@ -1,8 +1,9 @@
 import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
 import { concat, fromB64u, fromUtf8, randomId, toB64u, toHex, utf8, wipe } from '../crypto/encoding';
 import { generateRatchetKey, Ratchet, type DhKeyPair } from '../crypto/ratchet';
-import { createInviteSecret, decodeInvite, encodeInvite, extractInvite, openJoin, sealJoin, type InviteSecret, type InviteV2, type JoinNote } from '../net/invite';
-import { ackMail, createMailbox, deleteMailbox, fetchMail, normalizeRelayUrl, openEnvelope, postToMailbox, relayInfo, RelayError, sealEnvelope, setPushEndpoint, type MyMailbox } from '../net/mailbox';
+import { createInviteSecret, decodeInvite, encodeInvite, extractInvite, openJoin, parseCard, sealJoin, type InviteSecret, type InviteV3, type JoinNote } from '../net/invite';
+import { openEnvelope, sealEnvelope, type MailboxCard, type MyMailbox } from '../net/mailbox';
+import { isHexKey, MAX_RELAYS, newMailboxKey, normalizeRelay, NostrPool, WRAP_KIND, wrapEvent, type NostrEvent } from '../net/nostr';
 import { peerId, peerPub, samePub, type Identity } from '../crypto/identity';
 import { aesKey, cryptoSupported, hkdf } from '../crypto/primitives';
 import { acceptAnswer, acceptOffer, createPeer, makeOffer, type PeerLink } from '../net/peer';
@@ -123,15 +124,15 @@ function takeCodeFromUrl(): string | undefined {
   return code;
 }
 
-export async function createAccount(name: string, passphrase: string, relay?: string) {
+export async function createAccount(name: string, passphrase: string, useRelays = true) {
   await ensureActive();
   const vault = await Vault.create(passphrase);
   repo = new Repo(vault);
   identity = await repo.createIdentity();
   await repo.saveProfile({ name: name.trim().slice(0, MAX_NAME) });
+  await repo.saveSettings({ ...DEFAULT_SETTINGS, useRelays });
   await idb.requestPersistence();
   await enter();
-  if (relay) await setupMailbox(relay).catch((e) => toast(`Mailbox not set up: ${(e as Error).message}`, 'error', 6000));
 }
 
 export async function unlock(passphrase: string) {
@@ -862,7 +863,7 @@ async function onReady(p: Pending, peer: Uint8Array, asyncRoot: Uint8Array): Pro
 
 export async function createInvite(forContact?: string, liveCode = false): Promise<void> {
   if (forContact && canMail(forContact) && !liveCode) return connectContact(forContact);
-  if (!forContact && myMailbox && !liveCode) return createInviteLink();
+  if (!forContact && myCard() && !liveCode) return createInviteLink();
   closeConnect();
   store.set({ connect: { mode: 'invite', step: 'creating', forContact } });
   try {
@@ -1151,19 +1152,40 @@ export async function restoreBackup(file: Blob, backupPass: string, devicePass: 
   }
 }
 
-// ------------------------------------------------------------------ offline messages (mailbox relay + Double Ratchet)
+// ------------------------------------------------------------------ offline messages & rendezvous over public Nostr relays
+
+/**
+ * Nothing here depends on a server we run. Public Nostr relays are used as dumb,
+ * untrusted pipes for blobs that are already end-to-end encrypted:
+ *
+ *   offline messages  Double Ratchet (seeded by the post-quantum live handshake),
+ *                     sealed in a padded envelope only the two contacts can open
+ *   signaling         knock / offer / answer inside the ratchet (contacts) or the
+ *                     invite channel key (new contacts)
+ *   transport         NIP-59 style gift wraps: kind 1059, throwaway signing key per
+ *                     event, ["p", <our pseudonymous mailbox key>], NIP-40 expiry
+ *
+ * Every user gets a mailbox key automatically; contacts learn it during a live session.
+ */
 
 /** Message types that may arrive through a mailbox. Everything else needs a live session. */
 const MAILBOX_TYPES = new Set(['msg', 'receipt', 'profile', 'disappear', 'mailbox', 'rtc']);
 const MAX_EPOCHS = 2;
-const POLL_MS = 30_000;
+const MAIL_TTL_S = 30 * 86_400;
+const RTC_TTL_S = 3_600;
+const OUTBOX_RETRY_MS = 30_000;
 
 let myMailbox: MyMailbox | undefined;
+let pool: NostrPool | undefined;
+let outboxTimer: ReturnType<typeof setInterval> | undefined;
 const asyncCache = new Map<string, AsyncState>();
 const asyncQueues = new Map<string, SerialQueue>();
 const envKeys = new Map<string, CryptoKey>();
-let pollTimer: ReturnType<typeof setInterval> | undefined;
-let polling: Promise<void> | undefined;
+
+/** Event ids already processed (persisted so relays replaying history cost nothing). */
+let processed = new Set<string>();
+let lastEventAt = 0;
+let processedTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Per-live-session secrets used once to (re)seed the ratchet, then wiped. */
 interface LiveSeed {
@@ -1174,6 +1196,13 @@ interface LiveSeed {
   bob?: DhKeyPair;
 }
 const seeds = new Map<string, LiveSeed>();
+
+const isLocalApp = () => location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const relaysOn = () => S().settings.useRelays && S().settings.relays.length > 0;
+
+function myCard(): MailboxCard | undefined {
+  return myMailbox && relaysOn() ? { pk: myMailbox.pk, relays: S().settings.relays } : undefined;
+}
 
 function asyncQueue(chat: string) {
   let q = asyncQueues.get(chat);
@@ -1189,68 +1218,129 @@ async function envKey(b64: string): Promise<CryptoKey> {
 
 /** Can we leave a message for this contact while they are offline? */
 export function canMail(chat: string): boolean {
-  return !!contact(chat)?.mailbox && !!asyncCache.get(chat)?.epochs.length;
+  return relaysOn() && !!contact(chat)?.mailbox?.pk && !!asyncCache.get(chat)?.epochs.length;
 }
 
 function publishOffline() {
   const offline: Record<string, boolean> = {};
   for (const c of S().contacts) offline[c.id] = canMail(c.id);
-  store.set({ offline, mailbox: myMailbox ? { relay: myMailbox.relay, push: !!myMailbox.push } : undefined });
+  store.set({ offline, relayStatus: pool?.status() ?? [] });
 }
 
 async function loadOffline() {
-  myMailbox = await R().getMailbox();
+  const stored = (await R().getMailbox()) as Partial<MyMailbox> | undefined;
+  // Older versions stored a self-hosted relay queue here; replace it with a Nostr key.
+  if (stored && isHexKey(stored.pk) && typeof stored.sk === 'string') myMailbox = stored as MyMailbox;
+  else {
+    myMailbox = newMailboxKey();
+    await R().saveMailbox(myMailbox);
+  }
+  const seen = await R().getProcessed();
+  processed = new Set(seen?.ids ?? []);
+  lastEventAt = seen?.last ?? 0;
+
   const now = Date.now();
+  for (const c of S().contacts) {
+    const st = await R().getAsync(c.id);
+    if (st) asyncCache.set(c.id, st);
+    if (c.mailbox && !isHexKey(c.mailbox.pk)) await updateContact(c.id, { mailbox: undefined });
+  }
   for (const inv of await R().listInvites()) {
     if (inv.exp < now) await R().deleteInvite(inv.iid);
     else invites.set(inv.iid, inv);
   }
   for (const ch of await R().listChannels()) {
-    if (ch.expires < now) await dropChannel(ch);
+    if (ch.expires < now || !isHexKey(ch.sendTo?.pk)) await dropChannel(ch);
     else channels.set(ch.iid, ch);
   }
   publishInvites();
-  boostTimer = setInterval(() => {
-    if (Date.now() < boostUntil) void pollMailbox();
-  }, BOOST_POLL_MS);
+  startPool();
+  outboxTimer = setInterval(() => void flushOutbox(), OUTBOX_RETRY_MS);
+  void flushOutbox();
   // Still waiting on an invite we accepted? Let the inviter know we are here.
   for (const ch of channels.values()) {
     if (ch.role === 'joiner' && !contact(ch.peerId)) void knock(ch.peerId, { kind: 'channel', iid: ch.iid }, ch.peerName);
   }
-  for (const c of S().contacts) {
-    const st = await R().getAsync(c.id);
-    if (st) asyncCache.set(c.id, st);
+}
+
+/** (Re)connects to our relays and subscribes to our mailbox. */
+function startPool() {
+  pool?.close();
+  pool = undefined;
+  if (relaysOn() && myMailbox) {
+    let pending: ReturnType<typeof setTimeout> | undefined;
+    pool = new NostrPool(
+      (ev) => void onWrapped(ev),
+      () => {
+        clearTimeout(pending);
+        pending = setTimeout(publishOffline, 200);
+      },
+    );
+    pool.setRelays(S().settings.relays);
+    // Catch up on anything that arrived while we were away (relays keep it up to 30 days).
+    const since = Math.max(Math.floor(Date.now() / 1000) - MAIL_TTL_S, Math.floor(lastEventAt / 1000) - 2 * 86_400);
+    pool.subscribe({ kinds: [WRAP_KIND], '#p': [myMailbox.pk], since });
   }
   publishOffline();
-  void pollMailbox();
-  void flushOutbox();
-  pollTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') void pollMailbox();
-    void flushOutbox();
-  }, POLL_MS);
+}
+
+export function reconnectRelays() {
+  startPool();
 }
 
 function stopOffline() {
-  clearInterval(pollTimer);
-  clearInterval(boostTimer);
+  clearInterval(outboxTimer);
+  clearTimeout(processedTimer);
+  pool?.close();
+  pool = undefined;
+  for (const s of seeds.values()) wipe(s.sk);
+  seeds.clear();
+  asyncCache.clear();
+  asyncQueues.clear();
+  envKeys.clear();
+  processed.clear();
+  myMailbox = undefined;
   for (const a of attempts.values()) a.link?.pc.close();
   attempts.clear();
   invites.clear();
   channels.clear();
   lastKnock.clear();
   releaseWakeLock();
-  for (const s of seeds.values()) wipe(s.sk);
-  seeds.clear();
-  asyncCache.clear();
-  asyncQueues.clear();
-  envKeys.clear();
-  myMailbox = undefined;
+}
+
+function rememberProcessed(id: string, createdAt: number) {
+  processed.add(id);
+  lastEventAt = Math.max(lastEventAt, createdAt * 1000);
+  clearTimeout(processedTimer);
+  processedTimer = setTimeout(() => {
+    if (repo) void R().saveProcessed({ ids: [...processed].slice(-3000), last: lastEventAt });
+  }, 2000);
+}
+
+async function onWrapped(ev: NostrEvent) {
+  if (processed.has(ev.id) || !repo) return;
+  rememberProcessed(ev.id, ev.created_at);
+  let body: Uint8Array;
+  try {
+    body = fromB64u(ev.content);
+  } catch {
+    return;
+  }
+  await receiveEnvelope(body).catch((e) => console.warn('[veil] relay message dropped:', (e as Error).message));
+}
+
+async function publishTo(card: MailboxCard, content: Uint8Array, ttl: number): Promise<{ ok: boolean; ev: NostrEvent }> {
+  const ev = await wrapEvent(card.pk, toB64u(content), ttl);
+  const p = pool ?? new NostrPool(() => {});
+  const ok = await p.publish(ev, card.relays);
+  if (!pool) p.close();
+  return { ok, ev };
 }
 
 /**
  * Sends an application message: over the live session when connected, otherwise
- * Double-Ratchet encrypted into the contact's mailbox (or the outbox if their relay is
- * unreachable right now).
+ * Double-Ratchet encrypted into the contact's mailbox (or the outbox if no relay
+ * accepted it right now).
  */
 async function sendApp(chat: string, msg: AppMessage, queueable = true): Promise<'live' | 'mailbox' | 'outbox'> {
   const s = sessions.get(chat);
@@ -1260,7 +1350,7 @@ async function sendApp(chat: string, msg: AppMessage, queueable = true): Promise
   }
   if (!queueable || !MAILBOX_TYPES.has(msg.t) || !canMail(chat)) throw new Error('not connected');
   return asyncQueue(chat).run(async () => {
-    const c = contact(chat)!;
+    const card = contact(chat)!.mailbox!;
     const st = asyncCache.get(chat)!;
     const ep = st.epochs[0]!;
     const r = Ratchet.fromJSON(ep.ratchet);
@@ -1270,42 +1360,35 @@ async function sendApp(chat: string, msg: AppMessage, queueable = true): Promise
     ep.ratchet = r.toJSON();
     await R().saveAsync(chat, st);
     const envelope = await sealEnvelope(await envKey(ep.envKey), sealed);
-    const item = { id: randomId(), chat, msgId: msg.t === 'msg' ? String(msg.id) : undefined, relay: c.mailbox!.relay, sid: c.mailbox!.sid, envelope: toB64u(envelope), tries: 0 };
-    try {
-      await postToMailbox(item.relay, item.sid, envelope);
-      return 'mailbox' as const;
-    } catch (err) {
-      if (err instanceof RelayError && err.status === 404) {
-        await updateContact(chat, { mailbox: undefined });
-        publishOffline();
-        throw err;
-      }
-      await R().saveOutbox(item);
-      return 'outbox' as const;
-    }
+    const { ok, ev } = await publishTo(card, envelope, msg.t === 'rtc' ? RTC_TTL_S : MAIL_TTL_S);
+    if (ok) return 'mailbox' as const;
+    await R().saveOutbox({ id: ev.id, chat, msgId: msg.t === 'msg' ? String(msg.id) : undefined, relays: card.relays, event: ev, tries: 0 });
+    return 'outbox' as const;
   });
 }
 
 let flushing = false;
 async function flushOutbox() {
-  if (!repo || flushing) return;
+  if (!repo || flushing || !relaysOn()) return;
   flushing = true;
   try {
     for (const item of await R().listOutbox()) {
-      try {
-        await postToMailbox(item.relay, item.sid, fromB64u(item.envelope));
+      if (!item.event || !Array.isArray(item.relays)) {
+        await R().deleteOutbox(item.id); // from an older version
+        continue;
+      }
+      const p = pool ?? new NostrPool(() => {});
+      const ok = await p.publish(item.event, item.relays);
+      if (!pool) p.close();
+      const m = item.msgId ? findMessage(item.chat, (x) => x.id === item.msgId) : undefined;
+      if (ok) {
         await R().deleteOutbox(item.id);
-        const m = item.msgId ? findMessage(item.chat, (x) => x.id === item.msgId) : undefined;
         if (m && m.status === 'sending') await setMessage({ ...m, status: 'queued' });
-      } catch (err) {
-        const gone = err instanceof RelayError && err.status === 404;
-        if (gone || item.tries >= 200) {
-          await R().deleteOutbox(item.id);
-          const m = item.msgId ? findMessage(item.chat, (x) => x.id === item.msgId) : undefined;
-          if (m) await setMessage({ ...m, status: 'failed' });
-        } else {
-          await R().saveOutbox({ ...item, tries: item.tries + 1 });
-        }
+      } else if (item.tries >= 200) {
+        await R().deleteOutbox(item.id);
+        if (m) await setMessage({ ...m, status: 'failed' });
+      } else {
+        await R().saveOutbox({ ...item, tries: item.tries + 1 });
       }
     }
   } finally {
@@ -1313,39 +1396,8 @@ async function flushOutbox() {
   }
 }
 
-/** Fetches, decrypts and acknowledges everything waiting in our mailbox. */
-export function pollMailbox(): Promise<void> {
-  if (!repo) return Promise.resolve();
-  const queues = [...(myMailbox ? [myMailbox] : []), ...[...channels.values()].flatMap((c) => (c.queue ? [c.queue] : []))];
-  if (!queues.length) return Promise.resolve();
-  polling ??= (async () => {
-    try {
-      for (const mb of queues) {
-        let after = 0;
-        for (;;) {
-          const { messages, more } = await fetchMail(mb, after);
-          for (const m of messages) {
-            await receiveEnvelope(m.body).catch((e) => console.warn('[veil] mailbox message dropped:', (e as Error).message));
-            after = m.id;
-          }
-          if (messages.length) await ackMail(mb, after);
-          if (!more) break;
-        }
-      }
-      store.set({ mailboxError: undefined });
-    } catch (err) {
-      if (err instanceof RelayError && err.status === 404) {
-        store.set({ mailboxError: 'Your mailbox no longer exists on the relay. Set it up again.' });
-      } else {
-        store.set({ mailboxError: (err as Error).message });
-      }
-    }
-  })().finally(() => (polling = undefined));
-  return polling;
-}
-
 async function receiveEnvelope(body: Uint8Array) {
-  // Trial decryption: the envelope carries no sender id.
+  // Trial decryption: envelopes carry no sender id.
   for (const [chat, st] of asyncCache) {
     for (const ep of st.epochs) {
       const inner = await openEnvelope(await envKey(ep.envKey), body);
@@ -1394,7 +1446,8 @@ async function startAsync(p: Pending, chat: string, peer: Uint8Array, asyncRoot:
     seed.bob = await generateRatchetKey();
     await p.session!.send({ t: 'ratchet-init', pub: toB64u(seed.bob.pub) });
   }
-  if (myMailbox) await p.session!.send({ t: 'mailbox', relay: myMailbox.relay, sid: myMailbox.sid });
+  const card = myCard();
+  if (card) await p.session!.send({ t: 'mailbox', ...card });
 }
 
 async function addEpoch(chat: string, r: Ratchet, env: string) {
@@ -1434,89 +1487,42 @@ async function onMailboxCard(chat: string, m: AppMessage) {
     await updateContact(chat, { mailbox: undefined });
     return publishOffline();
   }
-  if (typeof m.relay !== 'string' || typeof m.sid !== 'string' || !/^[A-Za-z0-9_-]{22}$/.test(m.sid)) return;
-  let relay: string;
-  try {
-    // A contact may only point us at a local relay when we run locally ourselves.
-    relay = normalizeRelayUrl(m.relay, isLocalApp());
-  } catch {
-    return;
-  }
-  await updateContact(chat, { mailbox: { relay, sid: m.sid } });
+  // A contact may only point us at a local relay when we run locally ourselves.
+  const card = parseCard(m.pk, m.relays, isLocalApp());
+  if (!card) return;
+  await updateContact(chat, { mailbox: card });
   publishOffline();
   void flushOutbox();
 }
 
-const isLocalApp = () => location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-
-async function announceMailbox() {
-  const card: AppMessage = myMailbox ? { t: 'mailbox', relay: myMailbox.relay, sid: myMailbox.sid } : { t: 'mailbox', remove: true };
-  for (const c of S().contacts) void sendApp(c.id, card).catch(() => {});
+/** Tell every contact where to reach us (live, or through their mailbox). */
+async function announceMailbox(remove = false) {
+  const card = myCard();
+  const msg: AppMessage = remove || !card ? { t: 'mailbox', remove: true } : { t: 'mailbox', ...card };
+  await Promise.all(S().contacts.map((c) => sendApp(c.id, msg).catch(() => {})));
 }
 
-/** Creates our mailbox on a relay and tells contacts where to leave messages. */
-export async function setupMailbox(input: string) {
-  const relay = normalizeRelayUrl(input, true);
-  if (myMailbox) await removeMailbox();
-  const mb = await createMailbox(relay);
-  await R().saveMailbox(mb);
-  myMailbox = mb;
-  publishOffline();
+/** Replace the list of public relays we read from (and that contacts write to). */
+export async function setRelays(list: string[]) {
+  const relays = [...new Set(list.map((r) => r.trim()).filter(Boolean).map((r) => normalizeRelay(r, isLocalApp())))].slice(0, MAX_RELAYS);
+  if (!relays.length) throw new Error('Add at least one relay, or turn public relays off');
+  await saveSettings({ relays });
+  startPool();
   await announceMailbox();
 }
 
-export async function removeMailbox() {
-  const mb = myMailbox;
-  if (!mb) return;
-  myMailbox = undefined;
-  await announceMailbox();
-  await deleteMailbox(mb).catch(() => {});
-  await R().saveMailbox(undefined);
-  publishOffline();
+/** Turn the public-relay features (invite links, offline messages, one-tap reconnect) on or off. */
+export async function setRelaysEnabled(on: boolean) {
+  if (!on) await announceMailbox(true);
+  await saveSettings({ useRelays: on });
+  startPool();
+  if (on) await announceMailbox();
 }
-
-/** Registers (or removes) a Web Push subscription so the relay can wake this device. */
-export async function setMailboxPush(on: boolean) {
-  const mb = myMailbox;
-  if (!mb || !('serviceWorker' in navigator)) throw new Error('Push is not available here');
-  const reg = await navigator.serviceWorker.ready;
-  if (!reg.pushManager) throw new Error('This browser does not support push');
-  if (on) {
-    const info = await relayInfo(mb.relay);
-    let sub = await reg.pushManager.getSubscription();
-    const current = sub?.options.applicationServerKey ? toB64u(new Uint8Array(sub.options.applicationServerKey)) : undefined;
-    if (sub && current !== info.vapid) {
-      await sub.unsubscribe();
-      sub = null;
-    }
-    sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64u(info.vapid) });
-    await setPushEndpoint(mb, sub.endpoint);
-    mb.push = sub.endpoint;
-  } else {
-    await setPushEndpoint(mb, null).catch(() => {});
-    await (await reg.pushManager.getSubscription())?.unsubscribe();
-    mb.push = undefined;
-  }
-  await R().saveMailbox(mb);
-  publishOffline();
-}
-
-// The service worker asks us to check the mailbox when a push arrives while we are open.
-navigator.serviceWorker?.addEventListener('message', (e) => {
-  if ((e.data as { type?: string })?.type === 'veil-poll') void pollMailbox();
-});
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') void pollMailbox();
-});
-addEventListener('online', () => {
-  void flushOutbox();
-  void pollMailbox();
-});
 
 // ------------------------------------------------------------------ rendezvous: invite links & one-tap reconnect
 
 /**
- * With a mailbox relay, WebRTC signaling no longer needs copy-pasted codes:
+ * Signaling without codes:
  *
  *   knock  "I would like to connect"           (from the side that wants to talk)
  *   offer  SDP offer                           (from the side that receives a knock)
@@ -1541,23 +1547,11 @@ interface Attempt {
 
 const KNOCK_TTL = 3 * 60_000;
 const OFFER_TTL = 90_000;
-const BOOST_MS = 3 * 60_000;
-const BOOST_POLL_MS = 2_000;
 
 const invites = new Map<string, InviteSecret>();
 const channels = new Map<string, ChannelRecord>();
 const attempts = new Map<string, Attempt>();
 const lastKnock = new Map<string, number>();
-let boostTimer: ReturnType<typeof setInterval> | undefined;
-let boostUntil = 0;
-
-export const DEFAULT_RELAY: string | undefined = (import.meta.env.VITE_DEFAULT_RELAY as string | undefined) || undefined;
-
-/** Poll our queues every 2 s for a while: someone is (or may be) trying to connect. */
-function boost(ms = BOOST_MS) {
-  boostUntil = Math.max(boostUntil, Date.now() + ms);
-  void pollMailbox();
-}
 
 function connecting(): boolean {
   const c = S().connect;
@@ -1576,7 +1570,8 @@ async function sendRtc(peer: string, t: Transport, msg: AppMessage) {
   }
   const ch = channels.get(t.iid);
   if (!ch) throw new Error('invite channel closed');
-  await postToMailbox(ch.sendTo.relay, ch.sendTo.sid, await sealEnvelope(await envKey(ch.key), utf8(JSON.stringify(msg))));
+  const { ok } = await publishTo(ch.sendTo, await sealEnvelope(await envKey(ch.key), utf8(JSON.stringify(msg))), RTC_TTL_S);
+  if (!ok) throw new Error('no relay accepted the message');
 }
 
 function setConnecting(peer: string, on: boolean) {
@@ -1597,7 +1592,6 @@ async function knock(peer: string, t: Transport, hint = '', quiet = true) {
   attempts.set(peer, { aid, role: 'knocker', started: Date.now() });
   lastKnock.set(peer, Date.now());
   setConnecting(peer, true);
-  boost();
   try {
     await sendRtc(peer, t, { t: 'rtc', k: 'knock', aid, ts: Date.now() });
   } catch (err) {
@@ -1614,7 +1608,7 @@ async function knock(peer: string, t: Transport, hint = '', quiet = true) {
   }, KNOCK_TTL);
 }
 
-/** One-tap (or automatic) reconnect to an existing contact through the mailbox. */
+/** One-tap (or automatic) reconnect to an existing contact through the relays. */
 export async function connectContact(chat: string, quiet = false): Promise<void> {
   if (!canMail(chat)) return createInvite(chat, true);
   closeConnect();
@@ -1626,7 +1620,6 @@ async function offerTo(peer: string, t: Transport, aid: string) {
   const link = createPeer(S().settings);
   attempts.set(peer, { aid, role: 'offerer', link, started: Date.now() });
   setConnecting(peer, true);
-  boost();
   const sdp = await makeOffer(link);
   if (attempts.get(peer)?.link !== link) return link.pc.close();
   await sendRtc(peer, t, { t: 'rtc', k: 'offer', aid, ts: Date.now(), sdp });
@@ -1708,14 +1701,14 @@ async function onConnected(peer: string) {
 async function dropChannel(ch: ChannelRecord) {
   channels.delete(ch.iid);
   if (repo) await R().deleteChannel(ch.iid);
-  if (ch.queue) await deleteMailbox(ch.queue).catch(() => {});
 }
 
 // ---- inviter side
 
-/** Creates a long-lived, single-use invite link (requires our mailbox). */
+/** Creates a long-lived, single-use invite link (needs public relays turned on). */
 export async function createInviteLink() {
-  if (!myMailbox) throw new Error('Set up a mailbox to create invite links');
+  const card = myCard();
+  if (!card) throw new Error('Turn on public relays in Settings to create invite links');
   closeConnect();
   store.set({ connect: { mode: 'invite', step: 'creating' } });
   try {
@@ -1724,7 +1717,7 @@ export async function createInviteLink() {
     await R().saveInvite(secret);
     invites.set(secret.iid, secret);
     publishInvites();
-    const inv: InviteV2 = { v: 2, id: S().myId, name: S().profile.name, relay: myMailbox.relay, sid: myMailbox.sid, ik: secret.ikPub, tok: secret.tok, iid: secret.iid, exp: secret.exp };
+    const inv: InviteV3 = { v: 3, id: S().myId, name: S().profile.name, mb: card.pk, rl: card.relays, ik: secret.ikPub, tok: secret.tok, iid: secret.iid, exp: secret.exp };
     const code = await encodeInvite(inv);
     store.set({ connect: { mode: 'invite', step: 'link', code, link: signalLink(code), expires: secret.exp } });
   } catch (err) {
@@ -1742,13 +1735,9 @@ export async function revokeInvite(iid: string) {
 async function onJoin(inv: InviteSecret, note: JoinNote, chan: Uint8Array) {
   if (note.id === S().myId) return;
   if (inv.claimedBy && inv.claimedBy !== note.id) return; // single use: someone else got here first
-  let reply: { relay: string; sid: string };
-  try {
-    reply = { relay: normalizeRelayUrl(note.reply.relay, isLocalApp()), sid: note.reply.sid };
-    if (!/^[A-Za-z0-9_-]{22}$/.test(reply.sid)) return;
-  } catch {
-    return;
-  }
+  if (contact(note.id) && sessions.get(note.id)?.isReady) return; // replayed note, already connected
+  const reply = parseCard(note.reply.pk, note.reply.relays, isLocalApp());
+  if (!reply) return;
   inv.claimedBy = note.id;
   await R().saveInvite(inv);
   const name = String(note.name ?? '').slice(0, MAX_NAME);
@@ -1765,11 +1754,11 @@ async function onJoin(inv: InviteSecret, note: JoinNote, chan: Uint8Array) {
 
 // ---- joiner side
 
-let previewed: InviteV2 | undefined;
+let previewed: InviteV3 | undefined;
 
 async function previewInvite(text: string) {
   try {
-    const inv = await decodeInvite(text);
+    const inv = await decodeInvite(text, isLocalApp());
     if (inv.id === S().myId) throw new Error('This is your own invite - send it to someone else');
     if (inv.exp < Date.now()) throw new Error('This invite link has expired. Ask for a new one.');
     previewed = inv;
@@ -1791,28 +1780,20 @@ export async function acceptInvite() {
   if (!inv) return;
   store.set({ connect: { mode: 'join', step: 'creating', peerName: inv.name } });
   try {
-    const relay = normalizeRelayUrl(inv.relay, isLocalApp());
-    let queue: ChannelRecord['queue'];
-    let reply: { relay: string; sid: string };
-    if (myMailbox) {
-      reply = { relay: myMailbox.relay, sid: myMailbox.sid };
-    } else {
-      // No mailbox of our own: a temporary reply queue on their relay, deleted after we meet.
-      queue = await createMailbox(relay);
-      reply = { relay: queue.relay, sid: queue.sid };
-    }
+    const reply = myCard();
+    if (!reply) throw new Error('Turn on public relays in Settings to accept invite links');
     const aid = randomId();
     const note: JoinNote = { t: 'join', iid: inv.iid, tok: inv.tok, id: S().myId, name: S().profile.name, reply, aid, ts: Date.now() };
     const { envelope, chan } = await sealJoin(inv, note);
-    const ch: ChannelRecord = { iid: inv.iid, role: 'joiner', key: toB64u(chan), peerId: inv.id, peerName: inv.name, sendTo: { relay, sid: inv.sid }, queue, expires: inv.exp };
+    const ch: ChannelRecord = { iid: inv.iid, role: 'joiner', key: toB64u(chan), peerId: inv.id, peerName: inv.name, sendTo: { pk: inv.mb, relays: inv.rl }, expires: inv.exp };
     wipe(chan);
     channels.set(ch.iid, ch);
     await R().saveChannel(ch);
     attempts.set(inv.id, { aid, role: 'knocker', started: Date.now() });
     lastKnock.set(inv.id, Date.now());
-    await postToMailbox(relay, inv.sid, envelope);
+    const { ok } = await publishTo(ch.sendTo, envelope, MAIL_TTL_S);
+    if (!ok) throw new Error("Could not reach the inviter's relays. Check your connection and try again.");
     previewed = undefined;
-    boost();
     void holdWakeLock();
     store.set({ connect: { mode: 'join', step: 'requested', peerName: inv.name } });
   } catch (err) {
@@ -1834,3 +1815,8 @@ function releaseWakeLock() {
   void wakeLock?.release().catch(() => {});
   wakeLock = undefined;
 }
+
+addEventListener('online', () => {
+  void flushOutbox();
+  if (pool) startPool();
+});

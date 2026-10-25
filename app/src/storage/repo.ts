@@ -2,7 +2,9 @@ import { concat, fromB64u, toB64u } from '../crypto/encoding';
 import { generateIdentity, importIdentityPrivate, type Identity } from '../crypto/identity';
 import * as idb from './idb';
 import type { RatchetJSON } from '../crypto/ratchet';
-import type { MyMailbox } from '../net/mailbox';
+import type { MailboxCard, MyMailbox } from '../net/mailbox';
+import type { NostrEvent } from '../net/nostr';
+import { DEFAULT_RELAYS } from '../net/nostr';
 import type { InviteSecret } from '../net/invite';
 import type { Vault } from './vault';
 
@@ -49,8 +51,8 @@ export interface Contact {
   unread: number;
   /** Last message summary for the chat list (stored encrypted like everything else). */
   preview?: MessagePreview;
-  /** Where to leave messages for this contact while they are offline (their relay). */
-  mailbox?: { relay: string; sid: string };
+  /** Where to leave messages for this contact while they are offline (their Nostr mailbox). */
+  mailbox?: MailboxCard;
 }
 
 export interface MessagePreview {
@@ -74,6 +76,10 @@ export interface Settings {
   notifications: boolean;
   /** Show contact names in notifications (visible on lock screens). */
   notifyNames: boolean;
+  /** Use public Nostr relays for invite links, offline messages and one-tap reconnect. */
+  useRelays: boolean;
+  /** Public relays we read our mailbox from (wss://). */
+  relays: string[];
   /** Knock on a contact's device when opening their chat, and answer their knocks. */
   autoConnect: boolean;
   /** Lifetime of invite links, in days. */
@@ -94,6 +100,8 @@ export const DEFAULT_SETTINGS: Settings = {
   enterToSend: true,
   notifications: false,
   notifyNames: false,
+  useRelays: true,
+  relays: DEFAULT_RELAYS,
   autoConnect: true,
   inviteDays: 7,
   lastBackupAt: 0,
@@ -126,20 +134,17 @@ export interface ChannelRecord {
   key: string;
   peerId: string;
   peerName: string;
-  sendTo: { relay: string; sid: string };
-  /** Joiner without a mailbox: temporary reply queue on the inviter's relay. */
-  queue?: MyMailbox;
+  sendTo: MailboxCard;
   expires: number;
 }
 
-/** A sealed envelope waiting to be uploaded (relay unreachable at send time). */
+/** A signed relay event no relay accepted yet; retried as-is (same id, so no duplicates). */
 export interface OutboxItem {
   id: string;
   chat: string;
   msgId?: string;
-  relay: string;
-  sid: string;
-  envelope: string;
+  relays: string[];
+  event: NostrEvent;
   tries: number;
 }
 
@@ -219,6 +224,14 @@ export class Repo {
 
   async deleteAsync(id: string) {
     await idb.del('kv', await this.asyncSlot(id));
+  }
+
+  getProcessed() {
+    return this.vault.getJson<{ ids: string[]; last: number }>('kv', 'relay-seen');
+  }
+
+  saveProcessed(p: { ids: string[]; last: number }) {
+    return this.vault.putJson('kv', 'relay-seen', p);
   }
 
   async listInvites(): Promise<InviteSecret[]> {

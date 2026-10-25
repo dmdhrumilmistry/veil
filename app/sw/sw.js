@@ -57,28 +57,3 @@ self.addEventListener('notificationclick', (event) => {
     })(),
   );
 });
-
-// Web Push from the user's mailbox relay. Pushes carry no payload: the relay knows nothing
-// worth sending. If Veil is open and visible it fetches the mail itself; otherwise we show a
-// generic notification (browsers require one for every push).
-self.addEventListener('push', (event) => {
-  event.waitUntil(
-    (async () => {
-      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const visible = wins.filter((w) => w.visibilityState === 'visible');
-      if (visible.length) {
-        for (const w of visible) w.postMessage({ type: 'veil-poll' });
-        return;
-      }
-      for (const w of wins) w.postMessage({ type: 'veil-poll' });
-      await self.registration.showNotification('Veil', {
-        body: 'You have new messages',
-        tag: 'veil-mail',
-        renotify: true,
-        icon: './icon-192.png',
-        badge: './icon-192.png',
-        data: { token: '' },
-      });
-    })(),
-  );
-});

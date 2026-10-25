@@ -4,7 +4,6 @@ name: Release
 #   1. verify, test (unit + two-browser E2E) and build the app
 #   2. publish a GitHub Release with zipped builds, SHA-256 checksums and signed build provenance
 #   3. deploy the website (/) and app (/app/) to GitHub Pages (skipped for pre-releases like v1.0.0-rc.1)
-#   4. publish the mailbox relay image to ghcr.io/<owner>/veil-relay (amd64 + arm64)
 
 on:
   push:
@@ -55,19 +54,8 @@ jobs:
         working-directory: app
         run: npm ci --ignore-scripts
 
-      - name: Relay checks
-        working-directory: relay
-        run: |
-          npm ci --ignore-scripts
-          npm audit --audit-level=high
-          npm run typecheck
-          npm test
-
       - name: Audit, typecheck, unit tests, build
         working-directory: app
-        env:
-          # Optional: Settings > Variables > VEIL_DEFAULT_RELAY (e.g. https://relay.example.com)
-          VITE_DEFAULT_RELAY: ${{ vars.VEIL_DEFAULT_RELAY }}
         run: |
           npm audit --omit=dev --audit-level=high
           npm run typecheck
@@ -155,38 +143,3 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
-
-  relay-image:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/veil-relay
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ needs.build.outputs.prerelease == 'false' }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: relay
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: true
-          sbom: true

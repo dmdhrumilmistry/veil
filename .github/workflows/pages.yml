@@ -33,8 +33,6 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - name: Build app
         working-directory: app
-        env:
-          VITE_DEFAULT_RELAY: ${{ vars.VEIL_DEFAULT_RELAY }}
         run: |
           npm ci --ignore-scripts
           npm test

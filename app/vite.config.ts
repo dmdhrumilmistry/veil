@@ -14,7 +14,7 @@ const CSP = [
   "img-src 'self' blob: data:",
   "media-src 'self' blob:",
   "font-src 'self'",
-  "connect-src 'self' https: http://localhost:* http://127.0.0.1:*", // user-chosen mailbox relays
+  "connect-src 'self' wss: ws://localhost:* ws://127.0.0.1:*", // public Nostr relays (ws:// only for local dev)
   "worker-src 'self'",
   "manifest-src 'self'",
   "base-uri 'none'",

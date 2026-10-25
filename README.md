@@ -6,8 +6,8 @@
 
 <p align="center">
   Private peer-to-peer chat and file sharing with post-quantum end-to-end encryption.<br/>
-  No accounts. No phone numbers. No servers required: everything stays on your devices.<br/>
-  Optional self-hosted mailbox relay for offline messages that only ever sees ciphertext.
+  No accounts. No phone numbers. No servers of our own: everything stays on your devices.<br/>
+  Invite links and offline messages ride public Nostr relays as encrypted, unlinkable blobs.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 ## What it is
 
-Veil is an installable web app (PWA) that runs on desktop, Android, iOS and tablets. Two devices connect **directly** over WebRTC data channels and talk through a layered, authenticated, end-to-end encrypted protocol. There is no backend: no signaling server, no message relay, no database in the cloud.
+Veil is an installable web app (PWA) that runs on desktop, Android, iOS and tablets. Two devices connect **directly** over WebRTC data channels and talk through a layered, authenticated, end-to-end encrypted protocol. There is no backend of our own. For invite links and offline messages, Veil uses existing public Nostr relays purely as untrusted pipes, and you can switch them off.
 
 | | |
 |---|---|
@@ -30,7 +30,7 @@ Veil is an installable web app (PWA) that runs on desktop, Android, iOS and tabl
 | **Message encryption** | **AES-256-GCM** with a fresh key per message from a Signal-style HMAC KDF chain, which gives forward secrecy |
 | **Verification** | 60-digit safety numbers plus QR, identity pinning from invite codes, and warnings when a key changes |
 | **Storage** | IndexedDB, every record sealed with AES-256-GCM under a random master key wrapped by **PBKDF2-SHA-256 (600k)**. Lookup keys are HMAC tags, never plaintext ids |
-| **Offline messages** | Optional, self-hosted [mailbox relay](relay/README.md). Messages are Signal **Double Ratchet** encrypted (seeded from the post-quantum handshake), wrapped in padded envelopes with no sender id, and woken by empty Web Push. The relay stores only ciphertext in anonymous queues |
+| **Offline messages** | Over public **Nostr** relays: Signal **Double Ratchet** encrypted (seeded from the post-quantum handshake), padded, and wrapped in gift-wrap events signed by a throwaway key each time. Relays see only ciphertext addressed to a pseudonymous mailbox key, never content or senders |
 | **Backups** | Optional encrypted `.veilbackup` file (AES-256-GCM, PBKDF2-SHA-256 600k, authenticated records with truncation detection) for moving devices or recovering after a forgotten passphrase |
 | **Files** | Any size up to 4 GB, streamed in encrypted 64 KiB frames with backpressure, stored in 1 MiB sealed chunks, SHA-256 verified on arrival |
 | **Hardening** | Strict CSP, Trusted Types, no third-party scripts, no analytics, no inline code, pinned dependencies, pinned CI actions |
@@ -59,24 +59,24 @@ app/                 The Veil PWA (TypeScript + Preact + Vite)
   src/ui/            Components
   test/              Unit tests (handshake, tamper/replay rejection, MITM detection, ...)
   e2e/               Two-browser end-to-end test over a real WebRTC connection
-relay/               Optional zero-knowledge mailbox relay (Node 24, no runtime deps, Docker image)
 site/                Marketing website (static, no build step)
 docs/                Architecture and threat model
 ```
 
 ## Invite links (no codes to send back)
 
-With a mailbox, **New chat** gives you one short link that works for 7 days for one person. Share it any way you like and go offline. When they open it and tap Connect, both apps find each other through the relay and connect on their own the next time you are both online. Existing contacts reconnect with one tap (or automatically when you open their chat): no codes at all. Without a mailbox, the original one-time codes still work.
-
-To give every new user this experience out of the box, deploy a relay and set the repository variable **`VEIL_DEFAULT_RELAY`** (Settings → Secrets and variables → Actions → Variables) to its URL. The next release embeds it as an opt-in default.
+**New chat** gives you one short link that works for 7 days for one person. Share it any way you like and go offline. When they open it and tap Connect, both apps find each other through public Nostr relays and connect on their own the next time you are both online. Existing contacts reconnect with one tap, or automatically when you open their chat. There are no codes at all.
 
 ## Offline messages
 
-Veil is peer-to-peer first. To receive messages while you are offline, run a tiny [mailbox relay](relay/README.md) (one `docker compose up`) and enter its address under **Settings → Offline messages**. Contacts learn your mailbox the next time you connect live. After that:
+When a contact is offline, your message is Double Ratchet encrypted, sealed in a padded envelope, and published to their relays as a gift-wrap event signed by a throwaway key. Relays hold only ciphertext and drop it after 30 days. Their Veil picks it up the moment it is open, and receipts and replies come back the same way. Files still need a live connection.
 
-- Messages to an offline contact are Double Ratchet encrypted, sealed in a padded envelope, and left in their mailbox. The chat shows a mailbox icon until they collect it, then the usual delivered and read ticks.
-- Receipts and replies travel back the same way. Files still need a live connection.
-- With **Wake this device** on, the relay sends an empty Web Push. The service worker shows "You have new messages" and Veil fetches and decrypts the mail on open. No native app is needed (Android, desktop, and iOS 16.4+ installed apps).
+**No servers of our own, and no setup:** every user gets a pseudonymous mailbox key automatically, and contacts learn it during their first live connection. The relays you use are listed in **Settings → Public relays** (defaults: nos.lol, relay.primal.net, nostr.mom, relay.damus.io; edit freely). Turn the switch off to stay purely peer-to-peer with one-time codes.
+
+**Limits:**
+- Relays can see IP addresses and timing (not content).
+- Delivery is best-effort, since relays are run by third parties.
+- Background notifications only work while Veil is running, because push notifications would require a server of our own.
 
 ## Develop
 
@@ -86,13 +86,11 @@ npm ci
 npm run dev          # http://localhost:5173
 npm test             # unit tests
 npm run build        # production build with CSP injected
-npm run test:e2e     # two real browsers + a real relay: chat, files, offline mail, backup/restore (needs `npx playwright install chromium`)
-
-cd ../relay
-npm ci && npm run typecheck && npm test
+npm run test:e2e     # real browsers + an in-process Nostr relay: chat, files, offline mail, invites, backup/restore
+npm run test:e2e:public   # same scenarios over real public relays (manual, needs internet)
 ```
 
-Node 24+ is required (the relay uses the built-in `node:sqlite` and runs TypeScript directly).
+The E2E tests need `npx playwright install chromium`. Node 24+ is required.
 
 Pushing to `main` runs CI (audit, typecheck, unit tests, build, two-browser E2E).
 
@@ -109,7 +107,6 @@ git tag v0.3.0 && git push origin v0.3.0
 The tag must match `app/package.json`. The workflow re-runs every check, then:
 
 - publishes a **GitHub Release** with `veil-app-vX.Y.Z.zip` (self-hostable app), `veil-website-and-app-vX.Y.Z.zip`, `SHA256SUMS.txt` and auto-generated notes
-- publishes the relay image `ghcr.io/dmdhrumilmistry/veil-relay` (amd64 + arm64, with SBOM and provenance)
 - signs **build provenance** (once the repo is public; GitHub does not offer it for personal private repos), so anyone can verify a zip came from this repo's CI: `gh attestation verify veil-app-vX.Y.Z.zip --repo dmdhrumilmistry/veil`
 - deploys to **GitHub Pages**. Tags with a suffix (`v1.0.0-rc.1`) become pre-releases and are not deployed.
 
