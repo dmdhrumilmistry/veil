@@ -49,7 +49,9 @@ android {
     buildTypes {
         release {
             signingConfig = if (keyProps.isNotEmpty()) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+            // R8 off: WebRTC loads classes via JNI that shrinking could strip.
             isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
