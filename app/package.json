@@ -21,7 +21,7 @@
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@noble/post-quantum": "0.7.1",
-    "preact": "10.29.8",
+    "preact": "11.0.1",
     "qrcode-generator": "2.0.4"
   },
   "devDependencies": {
