@@ -14,6 +14,7 @@ import { decodeSignal, encodeSignal, extractCode, signalLink } from '../net/sign
 import * as idb from '../storage/idb';
 import { BackupWriter, readBackup } from '../storage/backup';
 import { CHUNK_STORE_SIZE, DEFAULT_SETTINGS, Repo, type Contact, type FileMeta, type Message, type AsyncState, type ChannelRecord, type MessagePreview, type Settings, type StoredIdentity } from '../storage/repo';
+import { PAGE_SIZE } from '../storage/repo';
 import { Vault } from '../storage/vault';
 import { claimInstance, heldElsewhere, onInstanceLost } from './instance';
 import { clearNotifications, notify, onNotificationOpen, resetNotifications } from './notify';
@@ -147,8 +148,9 @@ export async function unlock(passphrase: string) {
 async function enter() {
   const r = R();
   const [profile, settings, contacts] = await Promise.all([r.getProfile(), r.getSettings(), r.listContacts()]);
+  await r.migrateMessageKeys(contacts.map((c) => c.id));
   applyTheme(settings.theme);
-  store.set({ phase: 'ready', myId: peerId(identity!.pub), profile, settings, contacts: sortContacts(contacts), messages: {}, presence: {}, view: 'chats' });
+  store.set({ phase: 'ready', myId: peerId(identity!.pub), profile, settings, contacts: sortContacts(contacts), messages: {}, older: {}, presence: {}, view: 'chats' });
   armAutoLock();
   sweepTimer = setInterval(() => void sweepExpired(), 10_000);
   await loadOffline();
@@ -183,7 +185,7 @@ function teardown() {
   clearInterval(sweepTimer);
   for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   objectUrls.clear();
-  store.set({ contacts: [], messages: {}, presence: {}, typing: {}, activeChat: undefined, connect: null, progress: {}, myId: '' });
+  store.set({ contacts: [], messages: {}, older: {}, presence: {}, typing: {}, activeChat: undefined, connect: null, progress: {}, myId: '' });
 }
 
 export async function wipeEverything() {
@@ -293,13 +295,30 @@ export async function openChat(id: string | undefined) {
   store.set({ activeChat: id, view: 'chats' });
   if (!id) return;
   void clearNotifications(id);
-  if (!S().messages[id]) {
-    const msgs = await R().listMessages(id);
-    store.set((s) => ({ messages: { ...s.messages, [id]: msgs } }));
-  }
+  if (!S().messages[id]) await loadFirstPage(id);
   await markRead(id);
   if (S().settings.autoConnect && !sessions.get(id)?.isReady && canMail(id) && Date.now() - (lastKnock.get(id) ?? 0) > 5 * 60_000) {
     void connectContact(id, true);
+  }
+}
+
+async function loadFirstPage(chat: string) {
+  const { messages, more } = await R().pageMessages(chat);
+  store.set((s) => ({ messages: { ...s.messages, [chat]: messages }, older: { ...s.older, [chat]: more } }));
+}
+
+let loadingOlder = false;
+/** Decrypts the next page of history when the user scrolls to the top. */
+export async function loadOlder(chat: string): Promise<boolean> {
+  const list = S().messages[chat];
+  if (loadingOlder || !list?.length || !S().older[chat]) return false;
+  loadingOlder = true;
+  try {
+    const { messages, more } = await R().pageMessages(chat, list[0]!.seq, PAGE_SIZE);
+    store.set((s) => ({ messages: { ...s.messages, [chat]: [...messages, ...(s.messages[chat] ?? [])] }, older: { ...s.older, [chat]: more } }));
+    return messages.length > 0;
+  } finally {
+    loadingOlder = false;
   }
 }
 
@@ -329,8 +348,7 @@ async function setMessage(m: Message, persist = true) {
 async function addMessage(m: Message) {
   await R().saveMessage(m);
   if (!S().messages[m.chat]) {
-    const msgs = await R().listMessages(m.chat);
-    store.set((s) => ({ messages: { ...s.messages, [m.chat]: msgs } }));
+    await loadFirstPage(m.chat);
   } else {
     await setMessage(m, false);
   }
@@ -348,7 +366,7 @@ async function setPreview(chat: string, preview: MessagePreview | undefined) {
 
 /** Recompute the chat-list preview after deletions so removed text never lingers there. */
 async function refreshPreview(chat: string) {
-  const list = S().messages[chat] ?? (await R().listMessages(chat));
+  const list = S().messages[chat] ?? (await R().pageMessages(chat, undefined, 5)).messages;
   const last = [...list].reverse().find((m) => !m.id.startsWith('sys-'));
   await setPreview(chat, last ? previewOf(last) : undefined);
 }
@@ -1133,6 +1151,7 @@ export async function restoreBackup(file: Blob, backupPass: string, devicePass: 
         // Transfers cannot resume after a restore.
         if (m.file && (m.file.state === 'transferring' || m.file.state === 'offered')) m.file = { ...m.file, state: 'failed', chunks: 0 };
         if (m.status === 'sending') m.status = 'failed';
+        delete m.seq; // renumbered in backup order
         await r.saveMessage(m);
       }
     }

@@ -51,6 +51,8 @@ export interface AppState {
   settings: Settings;
   contacts: Contact[];
   messages: Record<string, Message[]>;
+  /** Whether older history exists beyond what is loaded, per chat. */
+  older: Record<string, boolean>;
   presence: Record<string, Presence>;
   typing: Record<string, number>;
   activeChat?: string;
@@ -83,6 +85,7 @@ class Store {
     settings: DEFAULT_SETTINGS,
     contacts: [],
     messages: {},
+    older: {},
     presence: {},
     typing: {},
     connect: null,

@@ -56,6 +56,26 @@ export async function entries<T>(store: StoreName, prefix: string): Promise<[str
   return keys.map((k, i) => [String(k), values[i] as T]);
 }
 
+/**
+ * Newest-first page of entries under `prefix`, strictly below `before` (exclusive).
+ * Returns them in ascending key order.
+ */
+export async function pageBefore<T>(store: StoreName, prefix: string, before: string | undefined, limit: number): Promise<[string, T][]> {
+  const s = await tx(store, 'readonly');
+  const range = IDBKeyRange.bound(prefix, before ?? prefix + '\uffff', false, before !== undefined);
+  return new Promise((resolve, reject) => {
+    const out: [string, T][] = [];
+    const r = s.openCursor(range, 'prev');
+    r.onsuccess = () => {
+      const c = r.result;
+      if (!c || out.length >= limit) return resolve(out.reverse());
+      out.push([String(c.key), c.value as T]);
+      c.continue();
+    };
+    r.onerror = () => reject(r.error);
+  });
+}
+
 export async function wipeDatabase(): Promise<void> {
   const db = await dbp?.catch(() => undefined);
   db?.close();

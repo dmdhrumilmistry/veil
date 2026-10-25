@@ -11,6 +11,7 @@ import {
   displayName,
   fileUrl,
   formatTtl,
+  loadOlder,
   markRead,
   openChat,
   sendFiles,
@@ -335,7 +336,7 @@ function Composer({ chat, enabled, name, live }: { chat: string; enabled: boolea
 // ------------------------------------------------------------------ chat
 
 export function Chat({ contact }: { contact: Contact }) {
-  const { messages, presence, typing, offline } = useApp();
+  const { messages, presence, typing, offline, older } = useApp();
   const list = messages[contact.id];
   const online = presence[contact.id] === 'online';
   const mailable = !!offline[contact.id];
@@ -344,10 +345,14 @@ export function Chat({ contact }: { contact: Contact }) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const seen = useRef(0);
+  const lastSeen = useRef<string | undefined>(undefined);
   const [away, setAway] = useState(false);
   const [unseen, setUnseen] = useState(0);
   const [drag, setDrag] = useState(false);
   const name = displayName(contact);
+  // Keeps the visible message in place when older history is prepended above it.
+  const anchor = useRef<{ height: number; top: number } | undefined>(undefined);
+  const firstId = list?.[0]?.id;
 
   const toBottom = (smooth = false) => {
     const el = scroller.current;
@@ -358,11 +363,30 @@ export function Chat({ contact }: { contact: Contact }) {
   };
 
   useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && anchor.current) {
+      el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height);
+      anchor.current = undefined;
+    }
+  }, [firstId]);
+
+  const maybeLoadOlder = (el: HTMLDivElement) => {
+    if (el.scrollTop > 120 || !older[contact.id]) return;
+    anchor.current = { height: el.scrollHeight, top: el.scrollTop };
+    void loadOlder(contact.id).then((loaded) => {
+      if (!loaded) anchor.current = undefined;
+    });
+  };
+
+  // Count only messages appended at the bottom (older pages are prepended at the top).
+  const lastId = list?.[list.length - 1]?.id;
+  useLayoutEffect(() => {
     const n = list?.length ?? 0;
     if (stick.current) toBottom();
-    else if (n > seen.current) setUnseen((u) => u + (n - seen.current));
+    else if (lastId !== lastSeen.current && n > seen.current) setUnseen((u) => u + 1);
     seen.current = n;
-  }, [list?.length, isTyping, contact.id]);
+    lastSeen.current = lastId;
+  }, [lastId, isTyping, contact.id]);
 
   useEffect(() => {
     stick.current = true;
@@ -468,6 +492,7 @@ export function Chat({ contact }: { contact: Contact }) {
         aria-relevant="additions"
         onScroll={(e) => {
           const el = e.currentTarget;
+          maybeLoadOlder(el);
           const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           stick.current = atBottom;
           setAway(el.scrollHeight - el.scrollTop - el.clientHeight > 400);
@@ -475,6 +500,7 @@ export function Chat({ contact }: { contact: Contact }) {
         }}
       >
         {!list && <div class="center muted pad">Decrypting...</div>}
+        {list && older[contact.id] && <div class="older-hint" role="status">Scroll up for older messages</div>}
         {list?.length === 0 && (
           <div class="chat-empty">
             <div class="chat-empty-art"><Icon name="shieldCheck" size={36} /></div>

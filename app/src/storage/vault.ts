@@ -134,6 +134,20 @@ export class Vault {
     return out;
   }
 
+  /** Decrypts at most `limit` records below `before`, newest first in storage, ascending in the result. */
+  async pageJson<T>(store: idb.StoreName, prefix: string, before: string | undefined, limit: number): Promise<[string, T][]> {
+    const rows = await idb.pageBefore<Sealed>(store, prefix, before, limit);
+    const out: [string, T][] = [];
+    for (const [k, s] of rows) {
+      try {
+        out.push([k, JSON.parse(fromUtf8(await this.openBytes(`${store}:${k}`, s))) as T]);
+      } catch {
+        /* skip corrupted record */
+      }
+    }
+    return out;
+  }
+
   async putBlob(slot: string, data: Uint8Array): Promise<void> {
     await idb.put('chunks', slot, await this.sealBytes(`chunks:${slot}`, data));
   }

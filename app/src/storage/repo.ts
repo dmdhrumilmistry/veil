@@ -35,7 +35,18 @@ export interface Message {
   status: MessageStatus;
   /** Epoch ms after which both devices delete the message. */
   expiresAt?: number;
+  /**
+   * Per-chat local sequence number: storage keys sort by it, so a chat opens by
+   * decrypting only its newest page. (A counter, not a timestamp, so keys at rest do not
+   * reveal when you messaged.)
+   */
+  seq?: number;
 }
+
+/** Messages decrypted when a chat is opened, and per "load older" step. */
+export const PAGE_SIZE = 60;
+const seqKey = (n: number) => String(n).padStart(12, '0');
+const isSeqKey = (k: string) => /\/\d{12}$/.test(k);
 
 export interface Contact {
   id: string; // base64url Ed25519 identity key
@@ -296,22 +307,69 @@ export class Repo {
     return `${await this.vault.tag(`chat:${chat}`)}/`;
   }
 
-  async listMessages(chat: string): Promise<Message[]> {
-    const rows = await this.vault.listJson<Message>('msgs', await this.chatPrefix(chat));
-    return rows.map(([, m]) => m).sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+  private seqs = new Map<string, number>();
+
+  private async nextSeq(chat: string): Promise<number> {
+    let n = this.seqs.get(chat);
+    if (n === undefined) {
+      const prefix = await this.chatPrefix(chat);
+      // ':' sorts right after '9', so this window ends at the highest numeric key.
+      const tail = await idb.pageBefore('msgs', prefix, prefix + ':', 50);
+      n = Math.max(0, ...tail.filter(([k]) => isSeqKey(k)).map(([k]) => Number(k.slice(-12))));
+    }
+    this.seqs.set(chat, ++n);
+    return n;
   }
 
+  /** Every message in a chat, oldest first (backups, expiry sweeps). */
+  async listMessages(chat: string): Promise<Message[]> {
+    return (await this.vault.listJson<Message>('msgs', await this.chatPrefix(chat))).map(([, m]) => m);
+  }
+
+  /** One page of messages older than `beforeSeq` (or the newest page), oldest first. */
+  async pageMessages(chat: string, beforeSeq?: number, limit = PAGE_SIZE): Promise<{ messages: Message[]; more: boolean }> {
+    const prefix = await this.chatPrefix(chat);
+    const rows = await this.vault.pageJson<Message>('msgs', prefix, beforeSeq === undefined ? undefined : prefix + seqKey(beforeSeq), limit + 1);
+    const more = rows.length > limit;
+    return { messages: rows.slice(more ? 1 : 0).map(([, m]) => m), more };
+  }
+
+  /** Assigns a sequence number on first save; later saves update the same record. */
   async saveMessage(m: Message) {
-    await this.vault.putJson('msgs', (await this.chatPrefix(m.chat)) + m.id, m);
+    if (m.seq === undefined) m.seq = await this.nextSeq(m.chat);
+    await this.vault.putJson('msgs', (await this.chatPrefix(m.chat)) + seqKey(m.seq), m);
   }
 
   async deleteMessage(m: Message) {
     if (m.file) await this.deleteFile(m.file.fileId, m.file.chunks);
-    await idb.del('msgs', (await this.chatPrefix(m.chat)) + m.id);
+    const prefix = await this.chatPrefix(m.chat);
+    await idb.del('msgs', prefix + (m.seq === undefined ? m.id : seqKey(m.seq)));
   }
 
   async clearChat(chat: string) {
     for (const m of await this.listMessages(chat)) await this.deleteMessage(m);
+    this.seqs.delete(chat);
+  }
+
+  /**
+   * One-time upgrade from the old layout (keyed by message id, unordered) to sequence
+   * keys. Messages are renumbered in timestamp order. Safe to run on every unlock.
+   */
+  async migrateMessageKeys(chats: string[]): Promise<number> {
+    let moved = 0;
+    for (const chat of chats) {
+      const prefix = await this.chatPrefix(chat);
+      const legacy = (await this.vault.listJson<Message>('msgs', prefix)).filter(([k]) => !isSeqKey(k));
+      if (!legacy.length) continue;
+      legacy.sort(([, a], [, b]) => a.ts - b.ts || a.id.localeCompare(b.id));
+      for (const [key, m] of legacy) {
+        delete m.seq;
+        await this.saveMessage(m);
+        await idb.del('msgs', key);
+        moved++;
+      }
+    }
+    return moved;
   }
 
   // ---- file chunks (sealed at rest, 1 MiB each) ----
