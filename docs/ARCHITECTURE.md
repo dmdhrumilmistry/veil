@@ -166,6 +166,11 @@ Manual codes are WebRTC offers tied to a live `RTCPeerConnection`, so they die w
 - The joiner publishes a sealed `join` note to the inviter's mailbox: `epk || envelope(k_join, { iid, tok, id, name, reply: joiner's card, aid, ts })` with `(k_join || k_chan) = HKDF(X25519(epk, ik), salt = iid, "veil/v1/invite")`.
 - The inviter checks `tok` in constant time, **claims** the invite for the first joiner's identity (single use), and starts signaling over `k_chan`.
 - Links from v0.7 (`VEIL2I`, self-hosted relay) are rejected with a clear message.
+- **Interception detection:** a used invite is kept as a *spent* record until it expires. If a different identity later presents it, either the link was shared twice or someone intercepted it and joined first. Veil then:
+  - tells that joiner over their private join channel ("already used by someone else"),
+  - adds a warning to the chat with whoever claimed it, raises an alert, and flags the invite in Settings,
+  - asks the user to compare safety numbers with that contact.
+  The `invite-used` notice is sealed with that joiner's `k_chan`, so only the real inviter can send it.
 
 **Signaling:** three messages, `{ t: "rtc", k: "knock" | "offer" | "answer", aid, ts, sdp? }`.
 - Between contacts they travel **inside the Double Ratchet**, so they are authenticated as that contact. Over an invite they are sealed with `k_chan`.
@@ -173,6 +178,8 @@ Manual codes are WebRTC offers tied to a live `RTCPeerConnection`, so they die w
 - Glare (both knock or both offer) is resolved by identity order: the smaller key offers.
 - Relay subscriptions are live, so the whole exchange usually completes in a second or two.
 - The resulting live session runs the normal hybrid post-quantum handshake with `expectedPeer` pinned to the identity from the invite or contact. A relay that tampers with signaling only causes a failed connection.
+
+**Verification is the last step to "only the two of you":** encryption guarantees that only the two devices that ran the handshake can read a chat. Safety numbers prove the other device is the person you meant (no one swapped themselves in when you first connected). Unverified chats show a "Not verified yet" bar. Verifying is one tap: scan the safety QR on the other person's screen (BarcodeDetector). A match marks the contact verified, and a mismatch raises an interception warning. Browsers without a camera scanner compare the 60 digits manually.
 
 **Auto-connect (setting, on by default):** opening a chat with an offline contact sends one knock (at most every 5 minutes), and incoming knocks are answered automatically. Turning it off stops your device from revealing that you are online. Knocks are then answered only while you have that chat open, and otherwise logged as "tried to connect".
 

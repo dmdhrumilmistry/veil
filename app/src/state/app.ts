@@ -1419,6 +1419,7 @@ async function receiveEnvelope(body: Uint8Array) {
     if (!plain) continue;
     const m = JSON.parse(fromUtf8(plain)) as AppMessage;
     if (m?.t === 'rtc') await handleRtc(ch.peerId, { kind: 'channel', iid: ch.iid }, m, ch.peerName);
+    else if (m?.t === 'invite-used') await onInviteUsed(ch);
     return;
   }
   // Someone opened one of our invite links.
@@ -1559,7 +1560,17 @@ function connecting(): boolean {
 }
 
 function publishInvites() {
-  const list: InviteSummary[] = [...invites.values()].map((i) => ({ iid: i.iid, created: i.created, expires: i.exp, claimed: !!i.claimedBy })).sort((a, b) => b.created - a.created);
+  const list: InviteSummary[] = [...invites.values()]
+    .map((i) => ({
+      iid: i.iid,
+      created: i.created,
+      expires: i.exp,
+      claimed: !!i.claimedBy,
+      used: !!i.usedAt,
+      by: i.claimedBy ? displayName(contact(i.claimedBy) ?? ({ name: i.claimedName ?? '' } as Contact)) : undefined,
+      conflict: !!i.conflictReported,
+    }))
+    .sort((a, b) => b.created - a.created);
   store.set({ invites: list });
 }
 
@@ -1690,8 +1701,12 @@ async function onConnected(peer: string) {
   for (const ch of [...channels.values()]) {
     if (ch.peerId !== peer) continue;
     if (ch.role === 'inviter') {
-      invites.delete(ch.iid);
-      await R().deleteInvite(ch.iid);
+      // Keep the spent invite until it expires: anyone else presenting it later is a red flag.
+      const inv = invites.get(ch.iid);
+      if (inv) {
+        inv.usedAt = Date.now();
+        await R().saveInvite(inv);
+      }
     }
     await dropChannel(ch);
   }
@@ -1734,13 +1749,14 @@ export async function revokeInvite(iid: string) {
 
 async function onJoin(inv: InviteSecret, note: JoinNote, chan: Uint8Array) {
   if (note.id === S().myId) return;
-  if (inv.claimedBy && inv.claimedBy !== note.id) return; // single use: someone else got here first
-  if (contact(note.id) && sessions.get(note.id)?.isReady) return; // replayed note, already connected
+  if (inv.claimedBy && inv.claimedBy !== note.id) return onInviteReuse(inv, note, chan); // single use
+  if (inv.usedAt || (contact(note.id) && sessions.get(note.id)?.isReady)) return; // replayed note
   const reply = parseCard(note.reply.pk, note.reply.relays, isLocalApp());
   if (!reply) return;
-  inv.claimedBy = note.id;
-  await R().saveInvite(inv);
   const name = String(note.name ?? '').slice(0, MAX_NAME);
+  inv.claimedBy = note.id;
+  inv.claimedName = name;
+  await R().saveInvite(inv);
   const ch: ChannelRecord = { iid: inv.iid, role: 'inviter', key: toB64u(chan), peerId: note.id, peerName: name, sendTo: reply, expires: inv.exp };
   channels.set(ch.iid, ch);
   await R().saveChannel(ch);
@@ -1750,6 +1766,32 @@ async function onJoin(inv: InviteSecret, note: JoinNote, chan: Uint8Array) {
   // A join is a standing request: offer now even if it waited a while; if they are
   // gone, their app knocks again when it comes back.
   await offerTo(note.id, { kind: 'channel', iid: ch.iid }, note.aid);
+}
+
+/**
+ * A second, different identity presented an invite that was already claimed. Either
+ * the link was shared twice, or someone intercepted it and joined first. Tell the new
+ * joiner (their join note gave us a private channel to them) and warn the user loudly
+ * about the contact who claimed it, so they verify that person's safety number.
+ */
+async function onInviteReuse(inv: InviteSecret, note: JoinNote, chan: Uint8Array) {
+  const reply = parseCard(note.reply.pk, note.reply.relays, isLocalApp());
+  if (reply) {
+    const notice = await sealEnvelope(await aesKey(chan), utf8(JSON.stringify({ t: 'invite-used', ts: Date.now() })));
+    void publishTo(reply, notice, RTC_TTL_S).catch(() => {});
+  }
+  if (inv.conflictReported) return;
+  inv.conflictReported = true;
+  await R().saveInvite(inv);
+  publishInvites();
+  const claimed = inv.claimedBy ? contact(inv.claimedBy) : undefined;
+  const who = claimed ? displayName(claimed) : inv.claimedName || 'the person who used it';
+  const warning = `Someone else also tried to use the invite link that ${who} joined with. The link may have been intercepted. Compare safety numbers with ${who} in person or on a call before trusting this chat.`;
+  if (claimed) {
+    await addSystemNote(claimed.id, warning);
+  }
+  toast(warning, 'error', 15_000);
+  void notify({ kind: 'connected' });
 }
 
 // ---- joiner side
@@ -1772,6 +1814,20 @@ async function previewInvite(text: string) {
   } catch (err) {
     store.set({ connect: { mode: 'join', step: 'error', error: (err as Error).message } });
   }
+}
+
+/** The inviter tells us their link was already used by someone else. */
+async function onInviteUsed(ch: ChannelRecord) {
+  if (ch.role !== 'joiner' || sessions.get(ch.peerId)?.isReady) return;
+  attempts.delete(ch.peerId);
+  setConnecting(ch.peerId, false);
+  await dropChannel(ch);
+  releaseWakeLock();
+  const name = ch.peerName || 'the person who invited you';
+  const error = `This invite link was already used by someone else. If that was not you, the link may have been intercepted. Ask ${name} for a new link in person or over a channel you trust.`;
+  const c = S().connect;
+  if (c?.mode === 'join') store.set({ connect: { mode: 'join', step: 'error', peerName: ch.peerName, error } });
+  else toast(error, 'error', 15_000);
 }
 
 /** Accept the previewed invite: leave an encrypted join note in the inviter's mailbox. */

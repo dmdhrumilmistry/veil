@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { acceptInvite, closeConnect, createInvite, createInviteLink, openCode, setRelaysEnabled, startJoin, submitAnswer } from '../state/app';
 import { toast, useApp, type ConnectFlow } from '../state/store';
 import { Icon } from './icons';
 import { Qr } from './Qr';
 import { Modal } from './Modal';
+import { canScan, Scanner } from './Scanner';
 
 async function copy(text: string, what: string) {
   try {
@@ -50,54 +51,6 @@ function CodeActions({ link, code, title, copyLabel = 'Copy code' }: { link: str
   );
 }
 
-/** Uses the native BarcodeDetector where available (Chrome Android/macOS, Edge). */
-function Scanner({ onCode, onClose }: { onCode: (s: string) => void; onClose: () => void }) {
-  const video = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    let stream: MediaStream | undefined;
-    let raf = 0;
-    let stopped = false;
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        if (stopped) return stream.getTracks().forEach((t) => t.stop());
-        const v = video.current!;
-        v.srcObject = stream;
-        await v.play();
-        const detector = new (window as unknown as { BarcodeDetector: new (o: object) => { detect(v: HTMLVideoElement): Promise<{ rawValue: string }[]> } }).BarcodeDetector({ formats: ['qr_code'] });
-        const tick = async () => {
-          if (stopped) return;
-          try {
-            const found = await detector.detect(v);
-            const hit = found.find((f) => /VEIL(1|2I)/.test(f.rawValue));
-            if (hit) return onCode(hit.rawValue);
-          } catch {
-            /* frame not ready */
-          }
-          raf = requestAnimationFrame(() => void tick());
-        };
-        void tick();
-      } catch {
-        toast('Camera unavailable', 'error');
-        onClose();
-      }
-    })();
-    return () => {
-      stopped = true;
-      cancelAnimationFrame(raf);
-      stream?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-  return (
-    <div class="scanner">
-      <video ref={video} playsInline muted />
-      <div class="scanner-frame" aria-hidden="true" />
-      <button class="btn ghost sm" onClick={onClose}>Cancel scan</button>
-    </div>
-  );
-}
-
-const canScan = typeof window !== 'undefined' && 'BarcodeDetector' in window && !!navigator.mediaDevices;
 
 function PasteBox({ label, placeholder, onSubmit, cta }: { label: string; placeholder: string; onSubmit: (s: string) => void; cta: string }) {
   const [text, setText] = useState('');
@@ -106,12 +59,12 @@ function PasteBox({ label, placeholder, onSubmit, cta }: { label: string; placeh
     try {
       const t = await navigator.clipboard.readText();
       setText(t);
-      if (/VEIL(1|2I)/.test(t)) onSubmit(t);
+      if (/VEIL(1[OA]|3I)\./.test(t)) onSubmit(t);
     } catch {
       toast('Clipboard access denied - paste manually', 'error');
     }
   };
-  if (scan) return <Scanner onCode={(c) => { setScan(false); onSubmit(c); }} onClose={() => setScan(false)} />;
+  if (scan) return <Scanner accept={(raw) => /VEIL(1[OA]|3I)\./.test(raw)} onCode={(c) => { setScan(false); onSubmit(c); }} onClose={() => setScan(false)} />;
   return (
     <form class="paste-box" onSubmit={(e) => { e.preventDefault(); if (text.trim()) onSubmit(text); }}>
       <label class="field">
@@ -221,7 +174,7 @@ function JoinFlow({ c }: { c: Extract<ConnectFlow, { mode: 'join' }> }) {
     return <PasteBox label="Invite link or code" placeholder="Paste an invite link or code" cta="Continue" onSubmit={(t) => void openCode(t)} />;
   }
   if (c.step === 'creating') return <Busy text="Preparing a secure connection..." />;
-  if (c.step === 'error') return <ErrorState error={c.error} retry={startJoin} />;
+  if (c.step === 'error') return <ErrorState error={c.error} retry={startJoin} label="Use a different link" />;
   if (c.step === 'confirm') {
     return (
       <div class="confirm-invite">
@@ -262,12 +215,12 @@ function JoinFlow({ c }: { c: Extract<ConnectFlow, { mode: 'join' }> }) {
   );
 }
 
-function ErrorState({ error, retry }: { error?: string; retry: () => void }) {
+function ErrorState({ error, retry, label = 'Try again' }: { error?: string; retry: () => void; label?: string }) {
   return (
     <div class="error-state">
       <div class="err-icon"><Icon name="alert" size={28} /></div>
       <p>{error || 'Something went wrong'}</p>
-      <button class="btn primary" onClick={retry}>Try again</button>
+      <button class="btn primary" onClick={retry}>{label}</button>
     </div>
   );
 }

@@ -450,6 +450,16 @@ export function Chat({ contact }: { contact: Contact }) {
         </div>
       )}
 
+      {!contact.verified && (
+        <button class="verify-banner" onClick={() => store.set({ view: 'info' })}>
+          <Icon name="shield" size={16} />
+          <span>
+            <b>Not verified yet.</b> Compare safety numbers so you know only {name} can read this.
+          </span>
+          <span class="verify-cta">Verify</span>
+        </button>
+      )}
+
       <div
         class="messages"
         ref={scroller}

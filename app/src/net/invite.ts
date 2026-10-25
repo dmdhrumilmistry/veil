@@ -113,6 +113,10 @@ export interface InviteSecret {
   created: number;
   /** First joiner identity; the invite cannot be claimed by anyone else afterwards. */
   claimedBy?: string;
+  claimedName?: string;
+  /** Kept (spent) after use until expiry, so a second joiner reveals an intercepted link. */
+  usedAt?: number;
+  conflictReported?: boolean;
 }
 
 export async function createInviteSecret(ttlMs: number): Promise<InviteSecret> {

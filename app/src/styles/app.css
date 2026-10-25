@@ -2447,3 +2447,41 @@ dialog.lightbox img {
   background: var(--warn);
   animation: blink 1.2s infinite;
 }
+.invite-list li.conflict {
+  background: rgb(248 113 113 / 0.1);
+  border: 1px solid rgb(248 113 113 / 0.35);
+}
+.invite-list li.conflict b {
+  color: var(--danger);
+}
+
+/* Verification nudge */
+.verify-banner {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 8px clamp(12px, 4vw, 48px) 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgb(251 191 36 / 0.35);
+  background: rgb(251 191 36 / 0.08);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+.verify-banner .icon {
+  color: var(--warn);
+  flex: none;
+}
+.verify-banner span:not(.verify-cta) {
+  flex: 1;
+  min-width: 0;
+}
+.verify-cta {
+  flex: none;
+  font-weight: 700;
+  color: var(--primary);
+}
+[data-theme='light'] .verify-banner .icon {
+  color: #b45309;
+}

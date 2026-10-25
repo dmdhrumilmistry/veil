@@ -24,6 +24,7 @@ import { BackupCard } from './Backup';
 import { RelaysCard } from './Mailbox';
 import { notifyPermission, requestNotifyPermission, type NotifyPermission } from '../state/notify';
 import { Qr } from './Qr';
+import { canScan, Scanner } from './Scanner';
 
 const TTL_OPTIONS: [number, string][] = [
   [0, 'Off'],
@@ -48,6 +49,7 @@ export function ContactInfo({ contact }: { contact: Contact }) {
   const { myId, presence, offline } = useApp();
   const [alias, setAlias] = useState(contact.alias ?? '');
   const [danger, setDanger] = useState<'' | 'clear' | 'delete'>('');
+  const [scanning, setScanning] = useState(false);
   const number = useMemo(() => safetyNumber(peerPub(myId), peerPub(contact.id)), [myId, contact.id]);
   const groups = formatSafetyNumber(number);
 
@@ -74,18 +76,42 @@ export function ContactInfo({ contact }: { contact: Contact }) {
         <div class="card">
           <h4>Safety number</h4>
           <p class="muted small">
-            Compare these digits with {displayName(contact)} in person or on a call. If they match on both devices, nobody is intercepting your conversation.
+            Compare these digits with {displayName(contact)} in person or on a call, or scan each other's QR code. If they match, only the two of you can read this chat - nobody is in between.
           </p>
           <div class="safety-grid" aria-label={`Safety number ${groups.join(' ')}`}>
             {groups.map((g) => <code>{g}</code>)}
           </div>
-          <details class="qr-details">
-            <summary>Show as QR</summary>
-            <div class="qr-wrap sm"><Qr value={number} label="Safety number QR code" /></div>
-          </details>
-          <button class={`btn ${contact.verified ? 'ghost' : 'primary'}`} onClick={() => void updateContact(contact.id, { verified: !contact.verified })}>
-            <Icon name="shieldCheck" size={18} /> {contact.verified ? 'Clear verification' : 'Mark as verified'}
-          </button>
+          {scanning ? (
+            <Scanner
+              hint={`Point at the safety QR code on ${displayName(contact)}'s screen`}
+              accept={(raw) => /^\d{60}$/.test(raw)}
+              onClose={() => setScanning(false)}
+              onCode={(raw) => {
+                setScanning(false);
+                if (raw === number) {
+                  void updateContact(contact.id, { verified: true });
+                  toast(`Verified - only you and ${displayName(contact)} can read this chat`, 'success', 6000);
+                } else {
+                  toast(`Safety numbers do NOT match. Someone may be intercepting your chat with ${displayName(contact)}. Do not trust it until you can verify.`, 'error', 15000);
+                }
+              }}
+            />
+          ) : (
+            <>
+              <details class="qr-details">
+                <summary>Show my QR for them to scan</summary>
+                <div class="qr-wrap sm"><Qr value={number} label="Safety number QR code" /></div>
+              </details>
+              <div class="row wrap">
+                {canScan && !contact.verified && (
+                  <button class="btn primary" onClick={() => setScanning(true)}><Icon name="camera" size={18} /> Scan their code</button>
+                )}
+                <button class={`btn ${contact.verified || canScan ? 'ghost' : 'primary'}`} onClick={() => void updateContact(contact.id, { verified: !contact.verified })}>
+                  <Icon name="shieldCheck" size={18} /> {contact.verified ? 'Clear verification' : 'The numbers match'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         <div class="card">
@@ -223,12 +249,24 @@ function InvitesCard() {
       ) : (
         <ul class="invite-list">
           {invites.map((i) => (
-            <li>
+            <li class={i.conflict ? 'conflict' : ''}>
               <span class="grow">
-                <b>{i.claimed ? 'Opened - connecting when you are both online' : 'Waiting to be opened'}</b>
-                <small class="muted">Created {new Date(i.created).toLocaleDateString()} - {left(i.expires)}</small>
+                <b>
+                  {i.conflict
+                    ? `Possibly intercepted - verify ${i.by ?? 'this contact'}`
+                    : i.used
+                      ? `Used by ${i.by ?? 'a contact'}`
+                      : i.claimed
+                        ? `Opened by ${i.by ?? 'someone'} - connecting when you are both online`
+                        : 'Waiting to be opened'}
+                </b>
+                <small class="muted">
+                  {i.used ? 'Spent - kept until it expires to catch reuse' : `Created ${new Date(i.created).toLocaleDateString()}`} - {left(i.expires)}
+                </small>
               </span>
-              <button class="btn ghost sm danger-text" onClick={() => void revokeInvite(i.iid).then(() => toast('Invite revoked', 'success'))}>Revoke</button>
+              <button class="btn ghost sm danger-text" onClick={() => void revokeInvite(i.iid).then(() => toast(i.used ? 'Removed' : 'Invite revoked', 'success'))}>
+                {i.used ? 'Remove' : 'Revoke'}
+              </button>
             </li>
           ))}
         </ul>

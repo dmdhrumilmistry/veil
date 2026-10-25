@@ -348,6 +348,30 @@ try {
   await alice.locator('p.text', { hasText: 'joined from a link, no codes' }).waitFor({ timeout: 15000 });
   console.log('invite link ok (inviter offline at join time, auto-connect on return)');
 
+  // Interception: Eve gets hold of Alice's next link and joins first; then the intended
+  // friend (Frank) opens it. Frank must be told, and Alice must be warned loudly.
+  await alice.getByRole('button', { name: 'New chat' }).click();
+  await alice.getByText('Your invite link is ready').waitFor();
+  await alice.getByRole('button', { name: 'Copy link' }).click();
+  const secondLink = await clip(alice);
+  await alice.getByRole('button', { name: 'Done' }).click();
+  const eve = await peer('Eve', { width: 390, height: 844 });
+  await useRelay(eve, { fromChat: false, back: true });
+  await eve.goto(secondLink);
+  await eve.getByRole('button', { name: 'Connect', exact: true }).click();
+  await arrives(eve, eve.getByText('End-to-end encrypted', { exact: true }), 45000);
+  const frank = await peer('Frank', { width: 390, height: 844 });
+  await useRelay(frank, { fromChat: false, back: true });
+  await frank.goto(secondLink);
+  await frank.getByRole('button', { name: 'Connect', exact: true }).click();
+  await frank.getByText(/already used by someone else/).waitFor({ timeout: 30000 });
+  await shot(frank, 'invite-intercepted.png');
+  await alice.getByText(/Someone else also tried to use the invite link/).first().waitFor({ timeout: 15000 });
+  await alice.getByRole('button', { name: 'Settings' }).click();
+  await alice.getByText(/Possibly intercepted - verify Eve/).waitFor({ timeout: 15000 });
+  await shot(alice, 'invite-conflict.png');
+  console.log('intercepted invite detected (joiner told, inviter warned, invite flagged)');
+
   // Data at rest must not contain plaintext.
   const leaked = await alice.evaluate(async () => {
     const db = await new Promise((r) => { const q = indexedDB.open('veil'); q.onsuccess = () => r(q.result); });

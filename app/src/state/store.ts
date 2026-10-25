@@ -30,6 +30,10 @@ export interface InviteSummary {
   created: number;
   expires: number;
   claimed: boolean;
+  used: boolean;
+  by?: string;
+  /** Someone else also tried to use this link: possible interception. */
+  conflict: boolean;
 }
 
 export interface Toast {
