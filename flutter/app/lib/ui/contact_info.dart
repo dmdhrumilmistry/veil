@@ -70,8 +70,61 @@ class ContactInfoScreen extends StatelessWidget {
         Card(
           child: Column(children: [
             ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Nickname'),
+              subtitle: Text(contact.alias ?? (contact.name.isEmpty ? 'Not set' : 'Calls themselves "${contact.name}"')),
+              onTap: () async {
+                final t = TextEditingController(text: contact.alias ?? '');
+                final v = await showDialog<String>(
+                  context: context,
+                  builder: (d) => AlertDialog(
+                    title: const Text('Nickname'),
+                    content: TextField(controller: t, maxLength: 48, autofocus: true, decoration: InputDecoration(hintText: contact.name)),
+                    actions: [TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(d, t.text), child: const Text('Save'))],
+                  ),
+                );
+                if (v != null) await c.setAlias(contact.id, v);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.timer_outlined),
+              title: const Text('Disappearing messages'),
+              subtitle: const Text('Applies to new messages on both devices'),
+              trailing: DropdownButton<int>(
+                value: const [0, 300, 3600, 86400, 604800].contains(contact.disappearSecs) ? contact.disappearSecs : 0,
+                underline: const SizedBox(),
+                items: const [
+                  DropdownMenuItem(value: 0, child: Text('Off')),
+                  DropdownMenuItem(value: 300, child: Text('5 minutes')),
+                  DropdownMenuItem(value: 3600, child: Text('1 hour')),
+                  DropdownMenuItem(value: 86400, child: Text('1 day')),
+                  DropdownMenuItem(value: 604800, child: Text('1 week')),
+                ],
+                onChanged: (v) => c.setDisappearing(contact.id, v ?? 0),
+              ),
+            ),
+          ]),
+        ),
+        Card(
+          child: Column(children: [
+            ListTile(
               leading: const Icon(Icons.mail_outline),
               title: Text(c.canMail(contact.id) ? 'Offline messages on' : contact.mailbox != null ? 'Connect once to enable offline messages' : 'Live only'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.cleaning_services_outlined),
+              title: const Text('Clear chat'),
+              onTap: () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (d) => AlertDialog(
+                    title: const Text('Clear chat?'),
+                    content: const Text('Deletes all messages and files in this chat from this device.'),
+                    actions: [TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Clear'))],
+                  ),
+                );
+                if (ok == true) await c.clearChat(contact.id);
+              },
             ),
             ListTile(
               leading: const Icon(Icons.delete_outline, color: VeilColors.danger),

@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +7,7 @@ import '../services/controller.dart';
 import '../services/models.dart';
 import 'connect.dart';
 import 'contact_info.dart';
+import 'file_card.dart';
 import 'theme.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -149,6 +151,19 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
             child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              IconButton(
+                tooltip: online ? 'Send a file' : 'Files need a live connection',
+                icon: const Icon(Icons.add_circle_outline),
+                onPressed: online
+                    ? () async {
+                        final picked = await FilePicker.pickFiles();
+                        for (final f in picked) {
+                          final size = await f.length() ?? 0;
+                          await c.sendFile(contact.id, name: f.name, size: size, mime: mimeFor(f.name), open: () => f.xFile.openRead());
+                        }
+                      }
+                    : null,
+              ),
               Expanded(
                 child: TextField(
                   controller: _input,
@@ -267,14 +282,7 @@ class _Bubble extends StatelessWidget {
             borderRadius: BorderRadius.only(topLeft: r, topRight: r, bottomLeft: out || !last ? r : small, bottomRight: out && last ? small : r),
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-            if (m.kind == 'text')
-              SelectableText(m.text ?? '', style: TextStyle(color: out ? Colors.white : null, fontSize: 15))
-            else
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.insert_drive_file_outlined, color: out ? Colors.white : VeilColors.violet),
-                const SizedBox(width: 8),
-                Flexible(child: Text(m.file?.name ?? 'file', style: TextStyle(color: out ? Colors.white : null, fontWeight: FontWeight.w600))),
-              ]),
+            if (m.kind == 'text') SelectableText(m.text ?? '', style: TextStyle(color: out ? Colors.white : null, fontSize: 15)) else FileCard(m),
             if (last)
               Row(mainAxisSize: MainAxisSize.min, children: [
                 if (m.expiresAt != null) Icon(Icons.timer_outlined, size: 11, color: out ? Colors.white70 : Theme.of(context).hintColor),

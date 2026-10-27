@@ -27,6 +27,8 @@ export interface SessionEvents {
   closed(reason: string): void;
   /** Fired when bulk channel drains so blocked senders can continue. */
   drain(): void;
+  /** Connection health changed (false = temporarily unusable, e.g. peer vanished). */
+  health?(ok: boolean): void;
 }
 
 const HANDSHAKE_TIMEOUT_MS = 20_000;
@@ -74,6 +76,12 @@ export class Session {
     bulk.onbufferedamountlow = () => this.ev.drain();
     ctrl.onclose = () => this.close('Connection closed');
     pc.onconnectionstatechange = () => {
+      // 'disconnected' arrives within seconds when the other device vanishes (app killed,
+      // network gone), long before 'failed'. Stop trusting the channel right away so new
+      // messages take the offline path instead of disappearing into a dead connection.
+      const was = this.degraded;
+      this.degraded = pc.connectionState === 'disconnected';
+      if (was !== this.degraded) this.ev.health?.(!this.degraded);
       if (pc.connectionState === 'failed') this.close('Connection lost');
       if (pc.connectionState === 'closed') this.close('Connection closed');
     };
@@ -83,8 +91,10 @@ export class Session {
     else ctrl.onopen = () => void this.begin();
   }
 
+  private degraded = false;
+
   get isReady(): boolean {
-    return !!this.keys && !this.closedReason;
+    return !!this.keys && !this.closedReason && !this.degraded;
   }
 
   get peer(): Uint8Array | undefined {

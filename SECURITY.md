@@ -22,6 +22,7 @@ Please report security problems privately through **GitHub Security Advisories**
 | **XSS / script injection** | Strict CSP (`default-src 'none'`, `script-src 'self'`), Trusted Types enforced, no `innerHTML`, no inline scripts or styles, no third-party code. Only inert media types render inline. Everything else downloads as `application/octet-stream`. |
 | **Public Nostr relay operators** (invite links, offline messages, reconnect; can be turned off) | See only padded ciphertext addressed to a pseudonymous mailbox key, each event signed by a fresh throwaway key, so they cannot read content or link messages to a sender. Offline messages use the Double Ratchet seeded from the post-quantum handshake, and signaling is end-to-end encrypted too. A malicious relay can drop or delay messages, but cannot forge or alter them. |
 | **Backup file theft** | Backups are encrypted with AES-256-GCM under a separate passphrase (PBKDF2-SHA-256, 600k) and authenticated record by record. Tampering or truncation is detected before anything is restored. |
+| **Silent message loss** (peer app killed mid-session) | Live messages require a delivery receipt; otherwise they are re-sent through the mailbox with the same id and deduplicated on arrival. |
 | **Notification leaks** | OS notifications never include message content. Sender names are opt-in. Notification payloads carry a random in-memory token, never a contact id. |
 
 ### What Veil does not protect against

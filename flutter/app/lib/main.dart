@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'services/controller.dart';
+import 'services/notifications.dart';
 import 'ui/gate.dart';
 import 'ui/home.dart';
 import 'ui/theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  unawaited(Notifications.init());
   runApp(ChangeNotifierProvider(create: (_) => AppController()..boot(), child: const VeilApp()));
 }
 
@@ -42,9 +44,18 @@ class _VeilAppState extends State<VeilApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final c = context.read<AppController>();
-    if (state == AppLifecycleState.paused) _backgroundedAt = DateTime.now();
-    if (state == AppLifecycleState.resumed && _backgroundedAt != null && DateTime.now().difference(_backgroundedAt!) > const Duration(minutes: 5) && c.phase == Phase.ready) {
-      c.lock();
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _backgroundedAt ??= DateTime.now();
+      c.onPaused();
+    }
+    if (state == AppLifecycleState.resumed) {
+      final away = _backgroundedAt == null ? Duration.zero : DateTime.now().difference(_backgroundedAt!);
+      _backgroundedAt = null;
+      if (away > const Duration(minutes: 5) && c.phase == Phase.ready) {
+        c.lock();
+      } else {
+        c.onResumed();
+      }
     }
   }
 

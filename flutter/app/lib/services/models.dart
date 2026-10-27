@@ -115,6 +115,9 @@ class Settings {
   bool autoConnect;
   int inviteDays;
   bool enterToSend;
+  int autoAcceptMB;
+  bool notifications;
+  bool notifyNames;
   Settings({
     this.useStun = true,
     this.stunUrls = const ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'],
@@ -126,6 +129,9 @@ class Settings {
     this.autoConnect = true,
     this.inviteDays = 7,
     this.enterToSend = false,
+    this.autoAcceptMB = 25,
+    this.notifications = true,
+    this.notifyNames = false,
   });
 
   Map<String, Object?> toJson() => {
@@ -139,6 +145,9 @@ class Settings {
         'autoConnect': autoConnect,
         'inviteDays': inviteDays,
         'enterToSend': enterToSend,
+        'autoAcceptMB': autoAcceptMB,
+        'notifications': notifications,
+        'notifyNames': notifyNames,
       };
 
   static Settings fromJson(Object? j) {
@@ -155,6 +164,9 @@ class Settings {
       autoConnect: j['autoConnect'] as bool? ?? true,
       inviteDays: j['inviteDays'] as int? ?? 7,
       enterToSend: j['enterToSend'] as bool? ?? false,
+      autoAcceptMB: j['autoAcceptMB'] as int? ?? 25,
+      notifications: j['notifications'] as bool? ?? true,
+      notifyNames: j['notifyNames'] as bool? ?? false,
     );
   }
 }

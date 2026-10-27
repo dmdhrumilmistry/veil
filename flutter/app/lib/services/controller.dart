@@ -8,6 +8,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:veil_core/veil_core.dart';
 
 import 'models.dart';
+import 'notifications.dart';
 import 'peer.dart';
 import 'relay_pool.dart';
 import 'session.dart';
@@ -140,7 +141,11 @@ class AppController extends ChangeNotifier {
     phase = Phase.ready;
     notifyListeners();
     await _loadOffline();
+    _sweepTimer = Timer.periodic(const Duration(seconds: 10), (_) => sweepExpired());
+    if (settings.notifications) unawaited(Notifications.requestPermission());
   }
+
+  Timer? _sweepTimer;
 
   void lock() {
     for (final s in _sessions.values.toList()) {
@@ -152,6 +157,7 @@ class AppController extends ChangeNotifier {
     _pool?.close();
     _pool = null;
     _outboxTimer?.cancel();
+    _sweepTimer?.cancel();
     for (final a in _attempts.values) {
       a.link?.close();
     }
@@ -161,6 +167,15 @@ class AppController extends ChangeNotifier {
     _invites.clear();
     _channels.clear();
     _seqs.clear();
+    _outgoing.clear();
+    _incoming.clear();
+    progress.clear();
+    for (final t in _ackTimers.values) {
+      t.cancel();
+    }
+    _ackTimers.clear();
+    _unacked.clear();
+    _recent.clear();
     messages.clear();
     older.clear();
     presence.clear();
@@ -227,6 +242,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> openChat(String id) async {
+    unawaited(Notifications.clear(_notifId(id)));
     if (!messages.containsKey(id)) await _loadFirstPage(id);
     await markRead(id);
     if (settings.autoConnect && !(_sessions[id]?.isReady ?? false) && canMail(id) && DateTime.now().difference(_lastKnock[id] ?? DateTime(2000)) > const Duration(minutes: 5)) {
@@ -325,8 +341,10 @@ class AppController extends ChangeNotifier {
     final m = Message(id: randomId(), chat: chat, dir: 'out', ts: ts, kind: 'text', text: body, status: 'sending', expiresAt: c.disappearSecs > 0 ? ts + c.disappearSecs * 1000 : null);
     await _addMessage(m);
     try {
-      final via = await _sendApp(chat, {'t': 'msg', 'id': m.id, 'ts': ts, 'text': body, if (c.disappearSecs > 0) 'ttl': c.disappearSecs});
+      final payload = <String, Object?>{'t': 'msg', 'id': m.id, 'ts': ts, 'text': body, if (c.disappearSecs > 0) 'ttl': c.disappearSecs};
+      final via = await _sendApp(chat, payload);
       m.status = via == 'live' ? 'sent' : via == 'mailbox' ? 'queued' : 'sending';
+      if (via == 'live') _expectReceipt(chat, m.id, payload);
     } catch (_) {
       m.status = 'failed';
     }
@@ -361,22 +379,24 @@ class AppController extends ChangeNotifier {
         if (name != null) await updateContact(chat, (c) => c.name = name);
       case 'msg':
         final text = _str(m['text'], _maxText);
-        if (!_isId(m['id']) || text == null || _find(chat, m['id'] as String) != null) return;
+        if (!_isId(m['id']) || text == null) return;
+        if (_find(chat, m['id'] as String) != null || _recent.contains('$chat:${m['id']}')) {
+          unawaited(_sendApp(chat, {'t': 'receipt', 's': 'delivered', 'ids': [m['id']]}).catchError((_) => ''));
+          return;
+        }
+        _rememberSeen(chat, m['id'] as String);
         final now = DateTime.now().millisecondsSinceEpoch;
         final ttl = _num(m['ttl']);
         final ts = _num(m['ts']) ?? now;
         await _addMessage(Message(id: m['id'] as String, chat: chat, dir: 'in', ts: ts > now + 60000 ? now : ts, kind: 'text', text: text, status: 'delivered', expiresAt: ttl != null && ttl > 0 ? now + ttl * 1000 : null));
         unawaited(_sendApp(chat, {'t': 'receipt', 's': 'delivered', 'ids': [m['id']]}).catchError((_) => ''));
-        if (activeChat == chat) {
-          await markRead(chat);
-        } else {
-          await updateContact(chat, (c) => c.unread++);
-        }
+        await _afterIncoming(chat, 'message');
       case 'receipt':
         final st = m['s'] == 'read' ? 'read' : m['s'] == 'delivered' ? 'delivered' : null;
         if (st == null || m['ids'] is! List) return;
         for (final id in (m['ids'] as List).where(_isId).take(500)) {
-          final msg = _find(chat, id as String);
+          _settleReceipt(id as String);
+          final msg = _find(chat, id);
           if (msg != null && msg.dir == 'out' && msg.status != 'read') {
             msg.status = st;
             await _setMessage(msg);
@@ -390,7 +410,7 @@ class AppController extends ChangeNotifier {
         final secs = _num(m['secs']);
         if (secs == null || secs > 365 * 86400) return;
         await updateContact(chat, (c) => c.disappearSecs = secs);
-        await _systemNote(chat, secs > 0 ? 'Disappearing messages turned on' : 'Disappearing messages turned off');
+        await _systemNote(chat, secs > 0 ? 'Disappearing messages set to ${formatTtl(secs)}' : 'Disappearing messages turned off');
       case 'mailbox':
         if (m['remove'] == true) return updateContact(chat, (c) => c.mailbox = null);
         final card = MailboxCard.parse(m['pk'], m['relays']);
@@ -403,9 +423,14 @@ class AppController extends ChangeNotifier {
       case 'rtc':
         return _handleRtc(chat, null, m, contact(chat)?.displayName ?? '');
       case 'file-offer':
-        // Live file transfer is not in this app yet: decline politely so the sender sees it.
-        if (_isId(m['fileId'])) unawaited(_sessions[chat]?.send({'t': 'file-decline', 'fileId': m['fileId']}).catchError((_) {}));
-        await _systemNote(chat, '${contact(chat)?.displayName ?? 'Your contact'} tried to send a file. File transfer is available in the web app for now.');
+        return _onFileOffer(chat, m);
+      case 'file-accept':
+        return _onFileAccept(chat, m);
+      case 'file-decline':
+      case 'file-cancel':
+        return _onFileAbort(chat, m);
+      case 'file-done':
+        return _onFileDone(chat, m);
     }
   }
 
@@ -430,6 +455,15 @@ class AppController extends ChangeNotifier {
         early.clear();
       },
       onMessage: (m) => chat.isEmpty ? early.add(m) : unawaited(_onAppMessage(chat, m)),
+      onChunk: (fileId, index, data) async {
+        if (chat.isNotEmpty) await _onChunk(chat, fileId, index, data);
+      },
+      onHealth: (ok) {
+        if (chat.isEmpty) return;
+        presence[chat] = ok ? 'online' : 'connecting';
+        notifyListeners();
+        if (!ok) unawaited(_fallbackUnacked(chat));
+      },
       onClosed: (reason) {
         _attempts.removeWhere((_, a) => identical(a.link, link));
         if (identical(_pending, p)) {
@@ -439,6 +473,8 @@ class AppController extends ChangeNotifier {
         if (chat.isNotEmpty && identical(_sessions[chat], s)) {
           _sessions.remove(chat);
           presence.remove(chat);
+          unawaited(_failTransfers(chat));
+          unawaited(_fallbackUnacked(chat));
           if (reason != 'Locked' && reason != 'Replaced by a new connection') _toast('${contact(chat)?.displayName ?? 'Contact'}: $reason');
         }
         notifyListeners();
@@ -592,6 +628,7 @@ class AppController extends ChangeNotifier {
       if (ch != null && ch.expires > now) _channels[ch.iid] = ch;
     }
     _startPool();
+    await _loadDeliveryState();
     _outboxTimer = Timer.periodic(const Duration(seconds: 30), (_) => _flushOutbox());
     for (final ch in _channels.values) {
       if (ch.role == 'joiner' && contact(ch.peerId) == null) unawaited(_knock(ch.peerId, ch.iid, ch.peerName));
@@ -610,6 +647,7 @@ class AppController extends ChangeNotifier {
         },
       );
       _pool!.setRelays(settings.relays);
+      _saveNotifyState();
       final nowS = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       _pool!.subscribe(_mailbox!.pk, [nowS - _mailTtl, _lastEventAt ~/ 1000 - 2 * 86400].reduce((a, b) => a > b ? a : b));
     }
@@ -680,9 +718,9 @@ class AppController extends ChangeNotifier {
 
   /// Live session if connected; otherwise Double Ratchet into the contact's mailbox.
   final Map<String, Future<void>> _asyncQ = {};
-  Future<String> _sendApp(String chat, Map<String, Object?> msg) async {
+  Future<String> _sendApp(String chat, Map<String, Object?> msg, {bool mailboxOnly = false}) async {
     final s = _sessions[chat];
-    if (s?.isReady ?? false) {
+    if ((s?.isReady ?? false) && !mailboxOnly) {
       await s!.send(msg);
       return 'live';
     }
@@ -712,6 +750,7 @@ class AppController extends ChangeNotifier {
     _processed.add(id);
     _lastEventAt = [(_lastEventAt), (ev['created_at'] as int) * 1000].reduce((a, b) => a > b ? a : b);
     unawaited(_v.putJson('relay-seen', {'ids': _processed.toList().reversed.take(3000).toList(), 'last': _lastEventAt}));
+    _saveNotifyState();
     final body = decodeContent(ev['content'] as String);
     if (body == null) return;
     try {
@@ -1095,4 +1134,431 @@ class AppController extends ChangeNotifier {
   }
 
   String safetyWith(String contactId) => safetyNumber(identity!.pub, fromB64u(contactId));
+
+  // ------------------------------------------------------------------ delivery guarantees
+
+  /// Live channels can die silently (the other app was killed). Every message sent live
+  /// waits for its delivery receipt; without one in time - or if the link degrades or
+  /// closes - the same message (same id) goes out again through the contact's mailbox.
+  /// Receivers drop duplicates by id and simply confirm again. Survives restarts.
+  final Map<String, _PendingAck> _unacked = {};
+  final Map<String, Timer> _ackTimers = {};
+  final Set<String> _recent = {};
+  Timer? _deliverySave;
+
+  void _saveDeliveryState() {
+    _deliverySave?.cancel();
+    _deliverySave = Timer(const Duration(milliseconds: 500), () {
+      if (_vault == null) return;
+      unawaited(_v.putJson('delivery', {
+        'unacked': [
+          for (final e in _unacked.entries) [e.key, {'chat': e.value.chat, 'payload': e.value.payload, 'at': e.value.at}],
+        ],
+        'recent': _recent.toList().reversed.take(2000).toList().reversed.toList(),
+      }));
+    });
+  }
+
+  Future<void> _loadDeliveryState() async {
+    final d = await _v.getJson('delivery');
+    if (d is! Map) return;
+    _recent.addAll(((d['recent'] as List?) ?? const []).cast<String>());
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final e in (d['unacked'] as List?) ?? const []) {
+      final v = ((e as List)[1] as Map).cast<String, Object?>();
+      if (now - (v['at'] as int) < 7 * 86400000) _unacked[e[0] as String] = _PendingAck(v['chat'] as String, (v['payload'] as Map).cast(), v['at'] as int);
+    }
+    for (final chat in {for (final p in _unacked.values) p.chat}) {
+      unawaited(_fallbackUnacked(chat));
+    }
+  }
+
+  void _rememberSeen(String chat, String id) {
+    _recent.add('$chat:$id');
+    if (_recent.length > 3000) _recent.removeAll(_recent.take(1000).toList());
+    _saveDeliveryState();
+  }
+
+  void _expectReceipt(String chat, String id, Map<String, Object?> payload) {
+    _unacked[id] = _PendingAck(chat, payload, DateTime.now().millisecondsSinceEpoch);
+    _saveDeliveryState();
+    _ackTimers[id]?.cancel();
+    _ackTimers[id] = Timer(const Duration(seconds: 8), () => _fallbackUnacked(chat, only: id));
+  }
+
+  void _settleReceipt(String id) {
+    _ackTimers.remove(id)?.cancel();
+    if (_unacked.remove(id) != null) _saveDeliveryState();
+  }
+
+  Future<void> _fallbackUnacked(String chat, {String? only}) async {
+    if (_vault == null) return;
+    for (final e in _unacked.entries.toList()) {
+      if (e.value.chat != chat || (only != null && e.key != only) || !canMail(chat)) continue;
+      _ackTimers.remove(e.key)?.cancel();
+      _unacked.remove(e.key);
+      try {
+        final via = await _sendApp(chat, e.value.payload, mailboxOnly: true);
+        final m = _find(chat, e.key);
+        if (m != null && (m.status == 'sent' || m.status == 'sending')) {
+          m.status = via == 'mailbox' ? 'queued' : 'sending';
+          await _setMessage(m);
+        }
+      } catch (_) {
+        _unacked[e.key] = e.value;
+      }
+    }
+    _saveDeliveryState();
+  }
+
+  // ------------------------------------------------------------------ notifications & lifecycle
+
+  bool foreground = true;
+  Timer? _pauseTimer;
+
+  int _notifId(String chat) => chat.hashCode & 0x7fffffff;
+
+  Future<void> _afterIncoming(String chat, String kind) async {
+    final viewing = foreground && activeChat == chat;
+    if (viewing) {
+      await markRead(chat);
+      return;
+    }
+    await updateContact(chat, (c) => c.unread++);
+    if (!settings.notifications) return;
+    final name = contact(chat)?.displayName;
+    await Notifications.show(
+      id: _notifId(chat),
+      title: settings.notifyNames && name != null ? name : 'Veil',
+      body: kind == 'file' ? 'Sent you a file' : 'New message',
+    );
+  }
+
+  void _saveNotifyState() {
+    final mb = _mailbox;
+    if (mb == null) return;
+    unawaited(Notifications.saveState(
+      pk: mb.pk,
+      relays: settings.relays,
+      sinceSeconds: (_lastEventAt == 0 ? DateTime.now().millisecondsSinceEpoch : _lastEventAt) ~/ 1000 - 60,
+      seen: _processed,
+      enabled: settings.notifications && _relaysOn,
+    ));
+  }
+
+  /// Turn notifications on (asks the OS) or off.
+  Future<bool> setNotifications(bool on) async {
+    if (on && !await Notifications.requestPermission()) {
+      _toast('Notifications are blocked for Veil in system settings');
+      return false;
+    }
+    await saveSettings(settings..notifications = on);
+    _saveNotifyState();
+    return true;
+  }
+
+  /// App went to the background: after a short grace period, close live connections
+  /// cleanly so peers immediately switch to the offline path (phones freeze background
+  /// apps anyway, which would otherwise leave them talking to a dead connection).
+  void onPaused() {
+    foreground = false;
+    _pauseTimer?.cancel();
+    _pauseTimer = Timer(const Duration(seconds: 20), () {
+      for (final s in _sessions.values.toList()) {
+        s.close('Veil went to the background');
+      }
+    });
+  }
+
+  void onResumed() {
+    foreground = true;
+    _pauseTimer?.cancel();
+    if (phase != Phase.ready) return;
+    _startPool(); // sockets may have died while suspended; resubscribe catches up
+    unawaited(_flushOutbox());
+    final chat = activeChat;
+    if (chat != null) {
+      unawaited(markRead(chat));
+      unawaited(Notifications.clear(_notifId(chat)));
+      if (settings.autoConnect && !isOnline(chat) && canMail(chat)) unawaited(connectContact(chat, quiet: true));
+    }
+  }
+
+  // ------------------------------------------------------------------ chat settings (parity with the web app)
+
+  Future<void> setDisappearing(String chat, int secs) async {
+    await updateContact(chat, (c) => c.disappearSecs = secs);
+    unawaited(_sendApp(chat, {'t': 'disappear', 'secs': secs}).catchError((_) => ''));
+    await _systemNote(chat, secs > 0 ? 'Disappearing messages set to ${formatTtl(secs)}' : 'Disappearing messages turned off');
+  }
+
+  Future<void> setAlias(String chat, String alias) => updateContact(chat, (c) => c.alias = alias.trim().isEmpty ? null : alias.trim());
+
+  Future<void> clearChat(String chat) async {
+    _v.deleteChat(await _chatTag(chat));
+    messages[chat] = [];
+    older[chat] = false;
+    await updateContact(chat, (c) => c.preview = null);
+  }
+
+  List<InviteSecret> get invites => _invites.values.toList()..sort((a, b) => b.created.compareTo(a.created));
+
+  Future<void> revokeInvite(String iid) async {
+    _invites.remove(iid);
+    _v.delete('invite/$iid');
+    _channels.remove(iid);
+    _v.delete('chan/$iid');
+    notifyListeners();
+  }
+
+  /// Expire disappearing messages in loaded chats.
+  void sweepExpired() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final list in messages.values) {
+      for (final m in list.where((m) => m.expiresAt != null && m.expiresAt! <= now).toList()) {
+        unawaited(deleteMessage(m));
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ live file transfer (wire-compatible with the web app)
+
+  final Map<String, int> progress = {};
+  final Map<String, _Outgoing> _outgoing = {};
+  final Map<String, _Incoming> _incoming = {};
+
+  Future<String> _chunkKey(String fileId, int index) async => '${await _v.tag('file:$fileId')}/$index';
+
+  /// Sends a file: offer -> (their accept) -> 32 KiB sealed chunks on the bulk channel -> done.
+  Future<void> sendFile(String chat, {required String name, required int size, required String mime, required Stream<List<int>> Function() open}) async {
+    if (!isOnline(chat)) return _toast('Files need a live connection - tap Connect first');
+    if (size > maxFileSize) return _toast('Files are limited to 4 GB');
+    final c = contact(chat)!;
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final meta = FileMeta(fileId: randomId(), name: name.length > 200 ? name.substring(0, 200) : name, mime: mime, size: size, state: 'offered');
+    final m = Message(id: randomId(), chat: chat, dir: 'out', ts: ts, kind: 'file', file: meta, status: 'sending', expiresAt: c.disappearSecs > 0 ? ts + c.disappearSecs * 1000 : null);
+    _outgoing[meta.fileId] = _Outgoing(m, open);
+    await _addMessage(m);
+    try {
+      await _sessions[chat]!.send({'t': 'file-offer', 'id': m.id, 'ts': ts, 'fileId': meta.fileId, 'name': meta.name, 'size': size, 'mime': mime, if (c.disappearSecs > 0) 'ttl': c.disappearSecs});
+      m.status = 'sent';
+    } catch (_) {
+      _outgoing.remove(meta.fileId);
+      m.status = 'failed';
+      meta.state = 'failed';
+    }
+    await _setMessage(m);
+  }
+
+  Future<void> _onFileOffer(String chat, Map<String, Object?> m) async {
+    final name = _str(m['name'], 200), mime = _str(m['mime'], 100), size = _num(m['size']);
+    if (!_isId(m['id']) || !_isId(m['fileId']) || name == null || mime == null || size == null || size > maxFileSize) return;
+    if (_find(chat, m['id'] as String) != null || _recent.contains('$chat:${m['id']}')) return;
+    _rememberSeen(chat, m['id'] as String);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final ttl = _num(m['ttl']);
+    final msg = Message(
+      id: m['id'] as String,
+      chat: chat,
+      dir: 'in',
+      ts: now,
+      kind: 'file',
+      file: FileMeta(fileId: m['fileId'] as String, name: name, mime: mime, size: size, state: 'offered'),
+      status: 'delivered',
+      expiresAt: ttl != null && ttl > 0 ? now + ttl * 1000 : null,
+    );
+    await _addMessage(msg);
+    unawaited(_sendApp(chat, {'t': 'receipt', 's': 'delivered', 'ids': [msg.id]}).catchError((_) => ''));
+    await _afterIncoming(chat, 'file');
+    if (size <= settings.autoAcceptMB * 1024 * 1024) await acceptFile(msg);
+  }
+
+  Future<void> acceptFile(Message msg) async {
+    final f = msg.file;
+    final s = _sessions[msg.chat];
+    if (f == null || s == null || !s.isReady) return _toast('Not connected');
+    _incoming[f.fileId] = _Incoming(msg, IncomingFile(f.fileId, f.size, (i, block) async => _v.putChunk(await _chunkKey(f.fileId, i), block)));
+    f.state = 'transferring';
+    await _setMessage(msg);
+    await s.send({'t': 'file-accept', 'fileId': f.fileId});
+  }
+
+  Future<void> declineFile(Message msg) async {
+    msg.file?.state = 'declined';
+    await _setMessage(msg);
+    unawaited(_sessions[msg.chat]?.send({'t': 'file-decline', 'fileId': msg.file!.fileId}).catchError((_) {}));
+  }
+
+  Future<void> cancelTransfer(Message msg) async {
+    final id = msg.file!.fileId;
+    _outgoing[id]?.canceled = true;
+    _incoming.remove(id);
+    msg.file!.state = 'canceled';
+    msg.file!.chunks = 0;
+    await _setMessage(msg);
+    unawaited(_sessions[msg.chat]?.send({'t': 'file-cancel', 'fileId': id}).catchError((_) {}));
+  }
+
+  Future<void> _onFileAccept(String chat, Map<String, Object?> m) async {
+    final t = _outgoing[m['fileId']];
+    if (t == null || t.msg.chat != chat || t.msg.file!.state != 'offered') return;
+    unawaited(_stream(t));
+  }
+
+  Future<void> _stream(_Outgoing t) async {
+    final chat = t.msg.chat;
+    final meta = t.msg.file!;
+    final s = _sessions[chat];
+    if (s == null) return;
+    meta.state = 'transferring';
+    await _setMessage(t.msg);
+    final hash = Sha256Stream();
+    var wire = 0, block = 0, sent = 0;
+    var lastUi = DateTime(2000);
+    final buf = BytesBuilder(copy: false);
+    Future<void> flushBlock() async {
+      if (buf.isEmpty) return;
+      final b = buf.takeBytes();
+      await _v.putChunk(await _chunkKey(meta.fileId, block++), b); // keep our own sealed copy
+      for (var p = 0; p < b.length; p += Session.chunkSize) {
+        if (t.canceled || s.closedReason != null) throw StateError(t.canceled ? 'canceled' : 'disconnected');
+        final piece = Uint8List.sublistView(b, p, (p + Session.chunkSize).clamp(0, b.length));
+        await s.sendChunk(meta.fileId, wire++, piece);
+        sent += piece.length;
+        if (DateTime.now().difference(lastUi) > const Duration(milliseconds: 150)) {
+          lastUi = DateTime.now();
+          progress[meta.fileId] = sent;
+          notifyListeners();
+        }
+      }
+    }
+
+    try {
+      await for (final data in t.open()) {
+        hash.add(data);
+        buf.add(data);
+        if (buf.length >= storeBlockSize) await flushBlock();
+      }
+      await flushBlock();
+      await s.send({'t': 'file-done', 'fileId': meta.fileId, 'sha256': await hash.hex(), 'chunks': wire, 'size': sent});
+      meta
+        ..state = 'done'
+        ..chunks = block;
+    } catch (e) {
+      meta
+        ..state = t.canceled ? 'canceled' : 'failed'
+        ..chunks = 0;
+      if (!t.canceled) _toast('Transfer failed: $e');
+    }
+    _outgoing.remove(meta.fileId);
+    progress.remove(meta.fileId);
+    await _setMessage(t.msg);
+  }
+
+  Future<void> _onChunk(String chat, String fileId, int index, Uint8List data) async {
+    final t = _incoming[fileId];
+    if (t == null || t.msg.chat != chat) return; // canceled or unknown
+    await t.file.add(index, data);
+    progress[fileId] = t.file.received;
+    notifyListeners();
+  }
+
+  Future<void> _onFileDone(String chat, Map<String, Object?> m) async {
+    final id = m['fileId'];
+    if (id is! String) return;
+    final t = _incoming[id];
+    if (t == null || t.msg.chat != chat) return;
+    // ctrl and bulk are independent streams: let the last chunks land.
+    final want = _num(m['size']) ?? -1;
+    final deadline = DateTime.now().add(const Duration(seconds: 30));
+    while (t.file.received < want && DateTime.now().isBefore(deadline) && _incoming.containsKey(id)) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    if (!_incoming.containsKey(id)) return;
+    _incoming.remove(id);
+    progress.remove(id);
+    final meta = t.msg.file!;
+    try {
+      meta
+        ..chunks = await t.file.finish('${m['sha256']}')
+        ..state = 'done';
+    } catch (_) {
+      meta
+        ..chunks = 0
+        ..state = 'failed';
+      _toast('A received file failed its integrity check and was discarded');
+    }
+    await _setMessage(t.msg);
+  }
+
+  Future<void> _onFileAbort(String chat, Map<String, Object?> m) async {
+    final id = m['fileId'];
+    final out = _outgoing[id];
+    if (out != null && out.msg.chat == chat) {
+      out.canceled = true;
+      if (out.msg.file!.state == 'offered') {
+        _outgoing.remove(id);
+        out.msg.file!.state = m['t'] == 'file-decline' ? 'declined' : 'canceled';
+        await _setMessage(out.msg);
+      }
+    }
+    final inc = _incoming.remove(id);
+    if (inc != null && inc.msg.chat == chat) {
+      inc.msg.file!
+        ..state = 'canceled'
+        ..chunks = 0;
+      await _setMessage(inc.msg);
+    }
+  }
+
+  Future<void> _failTransfers(String chat) async {
+    for (final e in _incoming.entries.where((e) => e.value.msg.chat == chat).toList()) {
+      _incoming.remove(e.key);
+      e.value.msg.file!
+        ..state = 'failed'
+        ..chunks = 0;
+      await _setMessage(e.value.msg);
+    }
+    for (final t in _outgoing.values.where((t) => t.msg.chat == chat)) {
+      t.canceled = true;
+    }
+  }
+
+  /// Decrypts a stored file (received, sent, or restored from a backup).
+  Future<Uint8List> loadFile(FileMeta f) async {
+    final out = BytesBuilder(copy: false);
+    for (var i = 0; i < f.chunks; i++) {
+      final c = await _v.getChunk(await _chunkKey(f.fileId, i));
+      if (c == null) throw StateError('file data missing');
+      out.add(c);
+    }
+    return out.toBytes();
+  }
+}
+
+// =====================================================================================
+// Added in 0.11: file transfer, delivery guarantees, notifications, lifecycle, parity.
+// Kept as an extension so the wire logic above stays readable.
+// =====================================================================================
+
+String formatTtl(int secs) => secs < 3600 ? '${(secs / 60).round()} min' : secs < 86400 ? '${(secs / 3600).round()} h' : '${(secs / 86400).round()} d';
+
+class _Outgoing {
+  Message msg;
+  final Stream<List<int>> Function() open;
+  bool canceled = false;
+  _Outgoing(this.msg, this.open);
+}
+
+class _Incoming {
+  Message msg;
+  final IncomingFile file;
+  _Incoming(this.msg, this.file);
+}
+
+class _PendingAck {
+  final String chat;
+  final Map<String, Object?> payload;
+  final int at;
+  _PendingAck(this.chat, this.payload, this.at);
 }

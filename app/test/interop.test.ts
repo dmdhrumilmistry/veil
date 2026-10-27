@@ -12,6 +12,7 @@ import { fromB64u, toB64u, toHex, utf8 } from '../src/crypto/encoding';
 import { Handshake, type HandshakeMessage, type Role } from '../src/crypto/handshake';
 import { generateIdentity } from '../src/crypto/identity';
 import { sha256 } from '../src/crypto/primitives';
+import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
 
 const PEER = process.env.VEIL_DART_PEER;
 const FP_TS = 'sha-256 11:22:33';
@@ -69,6 +70,30 @@ async function run(tsRole: Role) {
   const back: string[] = [];
   for (const f of res.out as string[]) back.push(new TextDecoder().decode(await rx.open(fromB64u(f)))); // strictly in order
   expect(back).toEqual(['hello web', 'from flutter']);
+
+  // File transfer frames on the bulk channel, both directions, with SHA-256 checks.
+  const bulkTx = new SendChain(keys!.bulkSend, 'veil/v1/bulk');
+  const bulkRx = new RecvChain(keys!.bulkRecv, 'veil/v1/bulk');
+  const fileId = toB64u(crypto.getRandomValues(new Uint8Array(16)));
+  const payload = Uint8Array.from({ length: 100_000 }, (_, i) => (i * 31 + 7) & 0xff);
+  const bulkFrames: string[] = [];
+  for (let i = 0, off = 0; off < payload.length; i++, off += 32_000) {
+    const header = new Uint8Array(20);
+    header.set(fromB64u(fileId));
+    new DataView(header.buffer).setUint32(16, i);
+    bulkFrames.push(toB64u(await bulkTx.seal(new Uint8Array([...header, ...payload.subarray(off, off + 32_000)]))));
+  }
+  const fr = await dart.call({ cmd: 'bulk', fileId, size: payload.length, sha256: toHex(nobleSha256(payload)), in: bulkFrames, reply: 'file bytes from the Flutter app' });
+  expect(fr.received).toBe(payload.length);
+  const got: number[] = [];
+  for (const [i, f] of (fr.out as string[]).entries()) {
+    const plain = await bulkRx.open(fromB64u(f));
+    expect(toB64u(plain.subarray(0, 16))).toBe(fileId);
+    expect(new DataView(plain.buffer, plain.byteOffset + 16, 4).getUint32(0)).toBe(i);
+    got.push(...plain.subarray(20));
+  }
+  expect(new TextDecoder().decode(new Uint8Array(got))).toBe('file bytes from the Flutter app');
+  expect(fr.sha256).toBe(toHex(nobleSha256(new Uint8Array(got))));
   dart.close();
 }
 

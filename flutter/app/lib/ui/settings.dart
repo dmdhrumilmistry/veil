@@ -108,6 +108,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
         ),
         Card(
+          child: Column(children: [
+            SwitchListTile(
+              secondary: const Icon(Icons.notifications_outlined),
+              title: const Text('Notifications'),
+              subtitle: const Text('Instantly while Veil runs; every ~15 minutes when closed. Never shows message text.'),
+              value: c.settings.notifications,
+              onChanged: (v) => c.setNotifications(v),
+            ),
+            if (c.settings.notifications)
+              SwitchListTile(
+                secondary: const Icon(Icons.badge_outlined),
+                title: const Text('Show who it is from'),
+                subtitle: const Text('Visible on your lock screen'),
+                value: c.settings.notifyNames,
+                onChanged: (v) => c.saveSettings(c.settings..notifyNames = v),
+              ),
+            ListTile(
+              leading: const Icon(Icons.download_outlined),
+              title: const Text('Auto-accept files up to'),
+              trailing: DropdownButton<int>(
+                value: const [0, 5, 25, 100, 500].contains(c.settings.autoAcceptMB) ? c.settings.autoAcceptMB : 25,
+                underline: const SizedBox(),
+                items: [for (final v in const [0, 5, 25, 100, 500]) DropdownMenuItem(value: v, child: Text(v == 0 ? 'Always ask' : '$v MB'))],
+                onChanged: (v) => c.saveSettings(c.settings..autoAcceptMB = v ?? 25),
+              ),
+            ),
+          ]),
+        ),
+        if (c.settings.useRelays)
+          Card(
+            child: ExpansionTile(
+              leading: const Icon(Icons.link),
+              title: const Text('Invite links'),
+              subtitle: Text('${c.invites.length} active - single use, valid ${c.settings.inviteDays} days'),
+              children: [
+                for (final i in c.invites)
+                  ListTile(
+                    dense: true,
+                    leading: Icon(i.conflictReported ? Icons.warning_amber : Icons.link, color: i.conflictReported ? VeilColors.danger : null),
+                    title: Text(i.conflictReported
+                        ? 'Possibly intercepted - verify ${i.claimedName ?? 'this contact'}'
+                        : i.usedAt != null
+                            ? 'Used by ${i.claimedName ?? 'a contact'}'
+                            : i.claimedBy != null
+                                ? 'Opened by ${i.claimedName ?? 'someone'}'
+                                : 'Waiting to be opened'),
+                    subtitle: Text('Expires ${DateTime.fromMillisecondsSinceEpoch(i.exp).toLocal().toString().substring(0, 16)}'),
+                    trailing: TextButton(onPressed: () => c.revokeInvite(i.iid), child: Text(i.usedAt != null ? 'Remove' : 'Revoke')),
+                  ),
+                if (c.invites.isEmpty) const ListTile(dense: true, title: Text('No active invite links')),
+              ],
+            ),
+          ),
+        Card(
           child: SwitchListTile(
             secondary: const Icon(Icons.bolt_outlined),
             title: const Text('Connect automatically'),

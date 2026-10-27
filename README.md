@@ -24,7 +24,7 @@
 Veil comes in two forms that talk to each other:
 
 - **Web app (PWA)** at https://dmdhrumilmistry.github.io/veil/app/. Installable on desktop, Android, iOS and tablets.
-- **Native app (Flutter)** for Android, iOS, macOS, Windows and Linux. The Android APK is attached to every [release](https://github.com/dmdhrumilmistry/veil/releases).
+- **Native app (Flutter)** for Android, iOS, macOS, Windows and Linux. Android: download [veil-android.apk](https://dmdhrumilmistry.github.io/veil/download/veil-android.apk). It is also attached to every release.
 
 Both implement the same protocol. A shared vector file and a live interop test in CI prove they stay byte-compatible, so a web user and a native user can chat, and encrypted backups move between them.
 

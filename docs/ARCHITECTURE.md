@@ -23,7 +23,10 @@
 - `app/test/interop.test.ts` runs the TypeScript handshake against the compiled Dart one (both roles), then exchanges encrypted frames.
 - CI runs all of this on every push.
 
-**Not yet in the native app:** live file transfer. Incoming offers are declined politely, and files from restored backups can be viewed. Background notifications and deep links for `https://` invite links are also missing: paste or scan the link instead.
+**Native app specifics:**
+- **File transfer:** the same `file-*` control messages and bulk frames as the web app, using 32 KiB chunks, backpressure, streaming SHA-256 checks and sealed 1 MiB blocks at rest. The interop test covers it in both directions.
+- **Background:** after 20 seconds in the background the app closes live connections cleanly, so peers switch to the offline path at once. It locks after 5 minutes away.
+- **Not yet:** deep links for `https://` invite links (paste or scan them instead).
 
 ## Components
 
@@ -227,9 +230,20 @@ types     = 0x01 JSON entry { k, d } | 0x02 file chunk (fileId, index, bytes) | 
 - **Separate storage (iOS/iPadOS):** Home Screen apps get storage isolated from Safari, so they are independent installations with different identities. Data moves between them with an encrypted backup and restore. The app explains this on iOS during install and first run.
 - **Updates:** the service worker is versioned per build. Open windows check for a new version hourly and whenever they become visible. If an update lands during a conversation, a "Reload" banner appears instead of interrupting. Otherwise the app reloads itself.
 
+## Delivery guarantees
+
+A live data channel can die silently: the other app is killed, or the phone loses signal. Without care, a message "sends" into a dead connection and is lost. Both apps prevent this:
+
+1. **Degraded links are not trusted.** WebRTC reports `disconnected` within seconds when the peer vanishes, long before `failed`. Sessions then report not-ready, and new messages take the offline path.
+2. **Every live message waits for its delivery receipt.** If none arrives within 8 seconds, or the link degrades or closes, the same message (same id) is re-sent through the contact's mailbox. Pending acknowledgements are persisted, so they survive the app closing.
+3. **Receivers deduplicate by message id** (a persisted set of the last 2,000) and simply confirm again. A message is shown once even if both copies arrive.
+4. **The native app closes its connections cleanly when backgrounded,** so peers learn immediately instead of waiting for timeouts.
+
+The E2E test crashes the recipient's renderer mid-session (no goodbye, like a killed app), sends a message, reopens the recipient, and asserts the message arrives exactly once.
+
 ## Notifications
 
-Web Push would need a server we run, holding your push subscription and waking your device, which also reveals when you get messages. Veil has none, so notifications are **local**. The running app raises them when a message, file or connection arrives while Veil is in the background. That includes offline mail arriving over the live relay subscription. Messages sent while Veil is fully closed wait on the relays and show up the next time you open it.
+Web Push would need a server we run, holding your push subscription and waking your device, which also reveals when you get messages. Veil has none, so notifications are **local**. The native app adds a **background relay check**: Android WorkManager (or iOS background fetch) runs every ~15 minutes, OS permitting. It asks the relays whether new events are addressed to the user's pseudonymous mailbox key, using only that key, the relay list and the ids already seen, which are kept in the OS keystore. It never decrypts anything. If something is waiting it shows "You have new messages". The web app prompts users to turn notifications on, since browsers require an explicit opt-in. The running app raises them when a message, file or connection arrives while Veil is in the background. That includes offline mail arriving over the live relay subscription. Messages sent while Veil is fully closed wait on the relays and show up the next time you open it.
 
 - Shown through the service worker (`registration.showNotification`). Android browsers and installed iOS apps reject `new Notification()`. On iOS/iPadOS, notifications require Veil to be added to the Home Screen.
 - **Never** includes message text. The sender's name is opt-in (`Show who it is from`), since it appears on lock screens.

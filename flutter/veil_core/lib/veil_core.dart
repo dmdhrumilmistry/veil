@@ -5,6 +5,7 @@ export 'src/backup.dart';
 export 'src/chain.dart';
 export 'src/encoding.dart';
 export 'src/envelope.dart';
+export 'src/files.dart';
 export 'src/handshake.dart';
 export 'src/identity.dart';
 export 'src/invite.dart';

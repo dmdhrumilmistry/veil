@@ -1,7 +1,7 @@
 name: veil
 description: Veil - private peer-to-peer chat. Native app, wire-compatible with the Veil web app.
 publish_to: none
-version: 0.10.0+10
+version: 0.11.0+11
 
 environment:
   sdk: ^3.9.0
@@ -12,6 +12,7 @@ dependencies:
   veil_core:
     path: ../veil_core
   file_picker: 13.2.0
+  flutter_local_notifications: 22.3.3
   flutter_secure_storage: 11.2.0
   flutter_webrtc: 1.6.2+hotfix.4
   local_auth: 3.0.2
@@ -21,11 +22,27 @@ dependencies:
   qr_flutter: 4.1.0
   share_plus: 13.3.1
   sqlite3: 3.8.0
+  workmanager: 0.10.10
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: 0.14.4
 
 flutter:
   uses-material-design: true
+
+flutter_launcher_icons:
+  image_path: assets/icon/icon.png
+  android: true
+  adaptive_icon_background: "#0B0B14"
+  adaptive_icon_foreground: assets/icon/foreground.png
+  adaptive_icon_monochrome: assets/icon/monochrome.png
+  ios: true
+  remove_alpha_ios: true
+  macos:
+    generate: true
+  windows:
+    generate: true
+    icon_size: 256

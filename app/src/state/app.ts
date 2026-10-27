@@ -413,8 +413,10 @@ export async function sendText(chat: string, text: string) {
   };
   await addMessage(m);
   try {
-    const via = await sendApp(chat, { t: 'msg', id: m.id, ts, text: body, ttl: c.disappearSecs || undefined });
+    const payload: AppMessage = { t: 'msg', id: m.id, ts, text: body, ttl: c.disappearSecs || undefined };
+    const via = await sendApp(chat, payload);
     await setMessage({ ...m, status: via === 'live' ? 'sent' : via === 'mailbox' ? 'queued' : 'sending' });
+    if (via === 'live') expectReceipt(chat, m.id, payload);
   } catch {
     await setMessage({ ...m, status: 'failed' });
   }
@@ -486,7 +488,12 @@ async function onAppMessage(chat: string, m: AppMessage, via: 'live' | 'mailbox'
     case 'msg': {
       const text = str(m.text, MAX_TEXT);
       if (!isId(m.id) || text === undefined) return;
-      if (findMessage(chat, (x) => x.id === m.id)) return;
+      if (findMessage(chat, (x) => x.id === m.id) || seenBefore(chat, m.id)) {
+        // A retransmission (live copy lost its receipt): just confirm again.
+        void sendApp(chat, { t: 'receipt', s: 'delivered', ids: [m.id] }).catch(() => {});
+        return;
+      }
+      rememberSeen(chat, m.id);
       const now = Date.now();
       const ttl = num(m.ttl);
       const msg: Message = {
@@ -509,6 +516,7 @@ async function onAppMessage(chat: string, m: AppMessage, via: 'live' | 'mailbox'
       const st = m.s === 'read' ? 'read' : m.s === 'delivered' ? 'delivered' : undefined;
       if (!st) return;
       for (const id of ids) {
+        settleReceipt(id);
         const msg = findMessage(chat, (x) => x.id === id && x.dir === 'out');
         if (msg && msg.status !== 'read') await setMessage({ ...msg, status: st });
       }
@@ -615,7 +623,8 @@ async function onFileOffer(chat: string, m: AppMessage) {
   const mime = str(m.mime, 100);
   const size = num(m.size);
   if (!isId(m.id) || !isId(m.fileId) || name === undefined || mime === undefined || size === undefined || size > MAX_FILE) return;
-  if (findMessage(chat, (x) => x.id === m.id)) return;
+  if (findMessage(chat, (x) => x.id === m.id) || seenBefore(chat, m.id)) return;
+  rememberSeen(chat, m.id);
   const now = Date.now();
   const ttl = num(m.ttl);
   const msg: Message = {
@@ -848,6 +857,11 @@ function sessionEvents(p: Pending) {
     },
     chunk: (fileId: string, index: number, data: Uint8Array) => (chat ? onChunk(chat, fileId, index, data) : undefined),
     drain: () => {},
+    health: (ok: boolean) => {
+      if (!chat) return;
+      store.set((s) => ({ presence: { ...s.presence, [chat]: ok ? 'online' : 'connecting' } }));
+      if (!ok) void fallbackUnacked(chat);
+    },
     closed: (reason: string) => {
       for (const [k, a] of attempts) if (a.link === p.link) attempts.delete(k);
       if (pending === p) {
@@ -863,6 +877,7 @@ function sessionEvents(p: Pending) {
           return { presence };
         });
         void failTransfers(chat);
+        void fallbackUnacked(chat);
         if (reason !== 'Locked' && reason !== 'Replaced by a new connection') toast(`${displayName(contact(chat) ?? ({} as Contact))}: ${reason}`);
       }
     },
@@ -1288,6 +1303,7 @@ async function loadOffline() {
   }
   publishInvites();
   startPool();
+  await loadDeliveryState();
   outboxTimer = setInterval(() => void flushOutbox(), OUTBOX_RETRY_MS);
   void flushOutbox();
   // Still waiting on an invite we accepted? Let the inviter know we are here.
@@ -1323,6 +1339,11 @@ export function reconnectRelays() {
 
 function stopOffline() {
   clearInterval(outboxTimer);
+  for (const t of ackTimers.values()) clearTimeout(t);
+  ackTimers.clear();
+  unacked.clear();
+  recentIds.clear();
+  clearTimeout(deliverySaveTimer);
   clearTimeout(processedTimer);
   pool?.close();
   pool = undefined;
@@ -1375,9 +1396,9 @@ async function publishTo(card: MailboxCard, content: Uint8Array, ttl: number): P
  * Double-Ratchet encrypted into the contact's mailbox (or the outbox if no relay
  * accepted it right now).
  */
-async function sendApp(chat: string, msg: AppMessage, queueable = true): Promise<'live' | 'mailbox' | 'outbox'> {
+async function sendApp(chat: string, msg: AppMessage, queueable = true, mailboxOnly = false): Promise<'live' | 'mailbox' | 'outbox'> {
   const s = sessions.get(chat);
-  if (s?.isReady) {
+  if (s?.isReady && !mailboxOnly) {
     await s.send(msg);
     return 'live';
   }
@@ -1909,3 +1930,85 @@ addEventListener('online', () => {
   void flushOutbox();
   if (pool) startPool();
 });
+
+// ------------------------------------------------------------------ delivery guarantees
+
+/**
+ * A live data channel can die silently (the other app was killed, a phone lost signal):
+ * the message "sends" but is never delivered. So every message sent live waits for its
+ * delivery receipt; if none arrives in time, or the connection degrades or closes, the
+ * same message (same id) is re-sent through the contact's mailbox. Receivers drop
+ * duplicates by id and simply confirm again. Pending acks survive restarts.
+ */
+
+const ACK_TIMEOUT_MS = 8_000;
+const RECENT_LIMIT = 2000;
+
+interface PendingAck {
+  chat: string;
+  payload: AppMessage;
+  at: number;
+}
+const unacked = new Map<string, PendingAck>();
+const ackTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let recentIds = new Set<string>();
+let deliverySaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+function saveDeliveryState() {
+  clearTimeout(deliverySaveTimer);
+  deliverySaveTimer = setTimeout(() => {
+    if (!repo) return;
+    void R().vault.putJson('kv', 'delivery', { unacked: [...unacked.entries()], recent: [...recentIds].slice(-RECENT_LIMIT) });
+  }, 500);
+}
+
+async function loadDeliveryState() {
+  const d = await R().vault.getJson<{ unacked: [string, PendingAck][]; recent: string[] }>('kv', 'delivery');
+  recentIds = new Set(d?.recent ?? []);
+  for (const [id, p] of d?.unacked ?? []) {
+    if (Date.now() - p.at > 7 * 86_400_000) continue;
+    unacked.set(id, p);
+  }
+  // Anything still unconfirmed from the last run goes out through the mailbox now.
+  for (const chat of new Set([...unacked.values()].map((p) => p.chat))) void fallbackUnacked(chat);
+}
+
+const seenBefore = (chat: string, id: string) => recentIds.has(`${chat}:${id}`);
+function rememberSeen(chat: string, id: string) {
+  recentIds.add(`${chat}:${id}`);
+  if (recentIds.size > RECENT_LIMIT * 1.5) recentIds = new Set([...recentIds].slice(-RECENT_LIMIT));
+  saveDeliveryState();
+}
+
+function expectReceipt(chat: string, id: string, payload: AppMessage) {
+  unacked.set(id, { chat, payload, at: Date.now() });
+  saveDeliveryState();
+  clearTimeout(ackTimers.get(id));
+  ackTimers.set(id, setTimeout(() => void fallbackUnacked(chat, id), ACK_TIMEOUT_MS));
+}
+
+function settleReceipt(id: string) {
+  clearTimeout(ackTimers.get(id));
+  ackTimers.delete(id);
+  if (unacked.delete(id)) saveDeliveryState();
+}
+
+/** Re-send unconfirmed live messages for a chat (or one message) through the mailbox. */
+async function fallbackUnacked(chat: string, only?: string) {
+  if (!repo) return;
+  for (const [id, p] of [...unacked]) {
+    if (p.chat !== chat || (only && id !== only)) continue;
+    if (!canMail(chat)) continue; // stays pending; retried when a mailbox becomes available
+    clearTimeout(ackTimers.get(id));
+    ackTimers.delete(id);
+    unacked.delete(id);
+    try {
+      const via = await sendApp(chat, p.payload, true, true);
+      const m = findMessage(chat, (x) => x.id === id);
+      if (m && (m.status === 'sent' || m.status === 'sending')) await setMessage({ ...m, status: via === 'mailbox' ? 'queued' : 'sending' });
+    } catch {
+      unacked.set(id, p);
+    }
+  }
+  saveDeliveryState();
+}

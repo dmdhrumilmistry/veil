@@ -317,6 +317,25 @@ try {
   await arrives(alice, alice.getByText('End-to-end encrypted', { exact: true }), 30000);
   console.log('one-tap reconnect via relay ok (no codes)');
 
+  // The reported bug: the recipient's app is killed without saying goodbye while a live
+  // session looks healthy. The message must not vanish into the dead connection.
+  const cdp = await bob.context().newCDPSession(bob);
+  // The crashed page never answers this call: do not wait for a reply.
+  await Promise.race([cdp.send('Page.crash').catch(() => {}), new Promise((r) => setTimeout(r, 1500))]);
+  await alice.getByLabel('Message', { exact: true }).fill('sent right after your app was killed');
+  await alice.keyboard.press('Enter');
+  // Falls back to the mailbox once the receipt does not come (or the link degrades).
+  await alice.locator('.msg.out', { hasText: 'sent right after your app was killed' }).locator('.status.queued, .status.delivered, .status.read').waitFor({ timeout: 30000 });
+  const bobAgain = await bob.context().newPage();
+  await bobAgain.goto(BASE);
+  await bobAgain.getByPlaceholder('Passphrase').fill(PASS);
+  await bobAgain.getByRole('button', { name: 'Unlock' }).click();
+  await bobAgain.getByRole('button', { name: /Alice/ }).first().click();
+  await arrives(bobAgain, bobAgain.locator('p.text', { hasText: 'sent right after your app was killed' }), 30000);
+  await bobAgain.waitForTimeout(2000);
+  if ((await bobAgain.locator('p.text', { hasText: 'sent right after your app was killed' }).count()) !== 1) fail('message duplicated after fallback');
+  console.log('no message lost when the recipient app is killed (ack timeout -> mailbox, delivered once)');
+
   // Invite link: Alice shares a link and goes away; Dave (no mailbox) accepts it later.
   await alice.getByRole('button', { name: 'New chat' }).click();
   await alice.getByText('Your invite link is ready').waitFor();

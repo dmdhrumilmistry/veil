@@ -4,6 +4,7 @@ import { store, useApp } from '../state/store';
 import { Avatar, relativeTime } from './common';
 import { Icon, Logo } from './icons';
 import { InstallCard } from './Install';
+import { NotifyPrompt } from './NotifyPrompt';
 
 export function Sidebar() {
   const { contacts, activeChat, presence, typing, profile, view } = useApp();
@@ -99,6 +100,7 @@ export function Sidebar() {
         })}
       </nav>
 
+      <NotifyPrompt />
       <InstallCard compact />
 
       <footer class="side-foot">
