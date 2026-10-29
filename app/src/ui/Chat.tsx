@@ -217,7 +217,7 @@ function MessageMenu({ m, onClose }: { m: Message; onClose: () => void }) {
 
 function Bubble({ m, first, last }: { m: Message; first: boolean; last: boolean }) {
   const [menu, setMenu] = useState(false);
-  const press = useRef<ReturnType<typeof setTimeout>>();
+  const press = useRef<ReturnType<typeof setTimeout>>(undefined);
   if (m.id.startsWith('sys-')) {
     return (
       <div class="sys-note" role="note">

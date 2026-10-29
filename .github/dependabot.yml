@@ -11,3 +11,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: pub
+    directories:
+      - /flutter/veil_core
+      - /flutter/app
+    schedule:
+      interval: weekly
+    groups:
+      pub-patches:
+        update-types: [patch, minor]

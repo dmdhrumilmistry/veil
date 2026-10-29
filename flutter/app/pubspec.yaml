@@ -1,7 +1,7 @@
 name: veil
 description: Veil - private peer-to-peer chat. Native app, wire-compatible with the Veil web app.
 publish_to: none
-version: 0.11.0+11
+version: 0.11.1+12
 
 environment:
   sdk: ^3.9.0

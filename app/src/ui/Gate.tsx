@@ -16,6 +16,8 @@ export function Onboarding() {
   const [pass, setPass] = useState('');
   const [confirm, setConfirm] = useState('');
   const [show, setShow] = useState(false);
+  // Preact 11's accessible input typings can't express a text/password union, so narrow it here.
+  const passType = (show ? 'text' : 'password') as 'password';
   const [useRelays, setUseRelays] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -98,7 +100,7 @@ export function Onboarding() {
         <div class="field">
           <label for="ob-pass">Passphrase</label>
           <div class="input-row">
-            <input id="ob-pass" aria-describedby="ob-pass-hint" type={show ? 'text' : 'password'} value={pass} autoComplete="new-password" required minLength={MIN_PASSPHRASE} onInput={(e) => setPass(e.currentTarget.value)} />
+            <input id="ob-pass" aria-describedby="ob-pass-hint" type={passType} value={pass} autoComplete="new-password" required minLength={MIN_PASSPHRASE} onInput={(e) => setPass(e.currentTarget.value)} />
             <button type="button" class="link-btn" aria-pressed={show} onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
           </div>
           <div class={`meter s${st.score}`} aria-hidden="true"><i /><i /><i /><i /></div>
@@ -107,7 +109,7 @@ export function Onboarding() {
 
         <div class="field">
           <label for="ob-confirm">Confirm passphrase</label>
-          <input id="ob-confirm" type={show ? 'text' : 'password'} value={confirm} autoComplete="new-password" required onInput={(e) => setConfirm(e.currentTarget.value)} />
+          <input id="ob-confirm" type={passType} value={confirm} autoComplete="new-password" required onInput={(e) => setConfirm(e.currentTarget.value)} />
           {confirm && confirm !== pass && <small class="err">Passphrases do not match</small>}
         </div>
 
