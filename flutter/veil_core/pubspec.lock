@@ -245,10 +245,10 @@ packages:
     dependency: "direct main"
     description:
       name: pqcrypto
-      sha256: ec5027887d3bfdcf0c383f805a813d7c518864e56e3e48028f5ed2980db7eb64
+      sha256: "1efc05e3a2c61d0f061e2b512207d1447b22bdad91f517ca91e6fac0df0f5136"
       url: "https://pub.dev"
     source: hosted
-    version: "0.4.3"
+    version: "0.4.4"
   pub_semver:
     dependency: transitive
     description:
