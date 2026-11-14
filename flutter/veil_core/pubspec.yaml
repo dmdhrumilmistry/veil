@@ -9,7 +9,7 @@ environment:
 dependencies:
   bip340: 0.3.1
   cryptography: 2.9.0
-  pqcrypto: 0.4.3
+  pqcrypto: 0.4.4
   unorm_dart: 0.3.3
 
 dev_dependencies:
